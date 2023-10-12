@@ -102,37 +102,6 @@
 local Grappler = {}
 local H = {}
 
-function serializeTable(val, name, skipnewlines, depth)
-	skipnewlines = skipnewlines or false
-	depth = depth or 0
-
-	local tmp = string.rep(" ", depth)
-
-	if name then
-		tmp = tmp .. name .. " = "
-	end
-
-	if type(val) == "table" then
-		tmp = tmp .. "{" .. (not skipnewlines and "\n" or "")
-
-		for k, v in pairs(val) do
-			tmp = tmp .. serializeTable(v, k, skipnewlines, depth + 1) .. "," .. (not skipnewlines and "\n" or "")
-		end
-
-		tmp = tmp .. string.rep(" ", depth) .. "}"
-	elseif type(val) == "number" then
-		tmp = tmp .. tostring(val)
-	elseif type(val) == "string" then
-		tmp = tmp .. string.format("%q", val)
-	elseif type(val) == "boolean" then
-		tmp = tmp .. (val and "true" or "false")
-	else
-		tmp = tmp .. '"[inserializeable datatype:' .. type(val) .. ']"'
-	end
-
-	return tmp
-end
-
 --- Module setup
 ---
 ---@param config table|nil Module config table. See |MiniIndentscope.config|.
@@ -153,7 +122,6 @@ Grappler.setup = function(config)
 
 	-- Setup config
 	config = H.setup_config(config)
-	vim.notify("setup config")
 
 	-- Apply config
 	H.apply_config(config)
@@ -238,17 +206,16 @@ Grappler.config = {
 	-- Draw options
 	draw = {
 		-- Delay (in ms) between event and start of drawing scope indicator
-		delay = 69,
+		delay = 100,
 
 		-- Animation rule for scope's first drawing. A function which, given
 		-- next and total step numbers, returns wait time (in ms). See
 		-- |MiniIndentscope.gen_animation| for builtin options. To disable
 		-- animation, use `require('mini.indentscope').gen_animation.none()`.
 		--minidoc_replace_start animation = --<function: implements constant 20ms between steps>,
-		-- animation = function(s, n)
-		-- 	return 20
-		-- end,
-		tick_ms = 20,
+		animation = function(s, n)
+			return 20
+		end,
 		--minidoc_replace_end
 
 		-- Symbol priority. Increase to display on top of more symbols.
@@ -285,8 +252,7 @@ Grappler.config = {
 	},
 
 	-- Which character to use for drawing scope indicator
-	-- symbol = "╎",
-	symbols = "/D",
+	symbol = "╎",
 }
 --minidoc_afterlines_end
 
@@ -433,33 +399,160 @@ end
 ---
 ---@param opts table|nil Options.
 Grappler.auto_draw = function(opts)
-	-- vim.notify("hi")
+	if H.is_disabled() then
+		H.undraw_scope()
+		return
+	end
+
+	opts = opts or {}
+	local scope = Grappler.get_scope()
+
+	-- Make early return if nothing has to be done. Doing this before updating
+	-- event id allows to not interrupt ongoing animation.
+	if opts.lazy and H.current.draw_status ~= "none" and H.scope_is_equal(scope, H.current.scope) then
+		return
+	end
+
+	-- Account for current event
+	local local_event_id = H.current.event_id + 1
+	H.current.event_id = local_event_id
+
+	-- Compute drawing options for current event
+	local draw_opts = H.make_autodraw_opts(scope)
+
+	-- Allow delay
+	if draw_opts.delay > 0 then
+		H.undraw_scope(draw_opts)
+	end
+
+	-- Use `defer_fn()` even if `delay` is 0 to draw indicator only after all
+	-- events are processed (stops flickering)
+	vim.defer_fn(function()
+		if H.current.event_id ~= local_event_id then
+			return
+		end
+
+		H.undraw_scope(draw_opts)
+
+		H.current.scope = scope
+		H.draw_scope(scope, draw_opts)
+	end, draw_opts.delay)
 end
--- TODO: start here
+
+--- Draw scope manually
+---
+--- Scope is visualized as a vertical line withing scope's body range at column
+--- equal to border indent plus one (or body indent if border is absent).
+--- Numbering starts from one.
+---
+---@param scope table|nil Scope. Default: output of |MiniIndentscope.get_scope|
+---   with default arguments.
+---@param opts table|nil Options. Currently supported:
+---    - <animation_fun> - animation function for drawing. See
+---      |MiniIndentscope-drawing| and |MiniIndentscope.gen_animation|.
+---    - <priority> - priority number for visualization. See `priority` option
+---      for |nvim_buf_set_extmark()|.
+Grappler.draw = function(scope, opts)
+	scope = scope or Grappler.get_scope()
+	local config = H.get_config()
+	local draw_opts = vim.tbl_deep_extend(
+		"force",
+		{ animation_fun = config.draw.animation, priority = config.draw.priority },
+		opts or {}
+	)
+
+	H.undraw_scope()
+
+	H.current.scope = scope
+	H.draw_scope(scope, draw_opts)
+end
 
 --- Undraw currently visible scope manually
 Grappler.undraw = function()
 	H.undraw_scope()
 end
-function array_concat(...)
-	local t = {}
-	for n = 1, select("#", ...) do
-		local arg = select(n, ...)
-		if type(arg) == "table" then
-			for _, v in ipairs(arg) do
-				t[#t + 1] = v
-			end
-		else
-			t[#t + 1] = arg
-		end
+
+--- Generate builtin animation function
+---
+--- This is a builtin source to generate animation function for usage in
+--- `MiniIndentscope.config.draw.animation`. Most of them are variations of
+--- common easing functions, which provide certain type of progression for
+--- revealing scope visual indicator.
+---
+--- Each field corresponds to one family of progression which can be customized
+--- further by supplying appropriate arguments.
+---
+--- Examples ~
+--- - Don't use animation: `MiniIndentscope.gen_animation.none()`
+--- - Use quadratic "out" easing with total duration of 1000 ms:
+---   `gen_animation.quadratic({ easing = 'out', duration = 1000, unit = 'total' })`
+---
+---@seealso |MiniIndentscope-drawing| for more information about how drawing is done.
+Grappler.gen_animation = {}
+
+---@alias __indentscope_animation_opts table|nil Options that control progression. Possible keys:
+---   - <easing> `(string)` - a subtype of progression. One of "in"
+---     (accelerating from zero speed), "out" (decelerating to zero speed),
+---     "in-out" (default; accelerating halfway, decelerating after).
+---   - <duration> `(number)` - duration (in ms) of a unit. Default: 20.
+---   - <unit> `(string)` - which unit's duration `opts.duration` controls. One
+---     of "step" (default; ensures average duration of step to be `opts.duration`)
+---     or "total" (ensures fixed total duration regardless of scope's range).
+---@alias __indentscope_animation_return function Animation function (see |MiniIndentscope-drawing|).
+
+--- Generate no animation
+---
+--- Show indicator immediately. Same as animation function always returning 0.
+Grappler.gen_animation.none = function()
+	return function()
+		return 0
 	end
-	return t
 end
--- Grappler.gen_animation.linear2 = function(duration)
--- 	return function(step, n_steps)
--- 		return (duration / n_steps) * step
--- 	end
--- end
+
+--- Generate linear progression
+---
+---@param opts __indentscope_animation_opts
+---
+---@return __indentscope_animation_return
+Grappler.gen_animation.linear = function(opts)
+	return H.animation_arithmetic_powers(0, H.normalize_animation_opts(opts))
+end
+
+--- Generate quadratic progression
+---
+---@param opts __indentscope_animation_opts
+---
+---@return __indentscope_animation_return
+Grappler.gen_animation.quadratic = function(opts)
+	return H.animation_arithmetic_powers(1, H.normalize_animation_opts(opts))
+end
+
+--- Generate cubic progression
+---
+---@param opts __indentscope_animation_opts
+---
+---@return __indentscope_animation_return
+Grappler.gen_animation.cubic = function(opts)
+	return H.animation_arithmetic_powers(2, H.normalize_animation_opts(opts))
+end
+
+--- Generate quartic progression
+---
+---@param opts __indentscope_animation_opts
+---
+---@return __indentscope_animation_return
+Grappler.gen_animation.quartic = function(opts)
+	return H.animation_arithmetic_powers(3, H.normalize_animation_opts(opts))
+end
+
+--- Generate exponential progression
+---
+---@param opts __indentscope_animation_opts
+---
+---@return __indentscope_animation_return
+Grappler.gen_animation.exponential = function(opts)
+	return H.animation_geometrical_powers(H.normalize_animation_opts(opts))
+end
 
 --- Move cursor within scope
 ---
@@ -475,7 +568,7 @@ Grappler.move_cursor = function(side, use_border, scope)
 	-- This defaults to body's side if it is not present in border
 	local target_line = 0
 	if side == "left" then
-		local original_line = vim.fn.line(".")
+		original_line = vim.fn.line(".")
 
 		target_line = use_border and scope.border["bottom"] or scope.body["bottom"]
 		target_line = math.min(math.max(target_line, 1), vim.fn.line("$"))
@@ -497,183 +590,6 @@ Grappler.move_cursor = function(side, use_border, scope)
 		-- Move to first non-blank character to allow chaining scopes
 		vim.cmd("normal! ^")
 	end
-end
-
-Grappler.operatorUR = function()
-	vim.notify("hi operatorUR")
-	local config = H.get_config()
-	local tick_ms = config.draw.tick_ms
-	local buf_id = vim.api.nvim_get_current_buf()
-	-- local delays = {}
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local line, col = cursor[1], cursor[2]
-	local res = H.UR_ray(line, col)
-
-	local draw_opts = {
-		event_id = H.current.event_id,
-		type = "animation",
-		delay = config.draw.delay,
-		tick_ms = config.draw.tick_ms,
-		priority = config.draw.priority,
-	}
-	if not res.found_target then
-		vim.notify("no target found")
-		return
-	end
-
-	-- todo use a sensible opts structure or something...                 chains, reel
-	local draw_func_chain = H.make_draw_function2(buf_id, draw_opts, "UR", false, false)
-	local draw_func_hook = H.make_draw_function2(buf_id, draw_opts, "UR", true, false)
-	local draw_func_reel = H.make_draw_function2(buf_id, draw_opts, "UR", false, true)
-
-	-- H.normalize_animation_opts()
-	-- local animation_func = config.draw.animation --Grappler.gen_animation.linear2(100)
-
-	H.current.draw_status = "drawing"
-	local n_steps = math.abs(res.target.line - res.src.line) - 1
-	local n_reel_steps = n_steps + 1 -- TODO: resolve this
-
-	-- don't draw chain on cursor
-	local og_line, og_col = line - 1, col + 1
-	local step, wait_time = 0, 0
-	local reel_step = 0
-
-	local extmark_ids = { chain = {}, hook = {} }
-	extmark_ids.all = function()
-		return array_concat(extmark_ids.chain, extmark_ids.hook)
-	end
-
-	local draw_step = vim.schedule_wrap(function()
-		-- vim.notify(
-		-- 	"draw_step, n_steps="
-		-- 		.. n_steps
-		-- 		.. ",step="
-		-- 		.. step
-		-- 		.. ",chain_extmark_ids=("
-		-- 		.. serializeTable(extmark_ids)
-		-- 		.. ")"
-		-- )
-		local chain_extmark_id = draw_func_chain(og_line - step, og_col + step)
-		table.insert(extmark_ids["chain"], chain_extmark_id)
-		if step >= n_steps - 1 then -- TODO code re-use here
-			step = step + 1
-			local hook_extmark_id = draw_func_hook(og_line - step, og_col + step)
-			table.insert(extmark_ids["hook"], hook_extmark_id)
-
-			-- vim.notify(
-			-- 	"Completed animation, calling finished_callback, n_steps="
-			-- 		.. n_steps
-			-- 		.. ",step="
-			-- 		.. step
-			-- 		.. ",chain_extmark_ids="
-			-- 		.. serializeTable(extmark_ids)
-			-- 		.. ", calling finished_callback"
-			-- )
-			H.current.draw_status = "finished"
-			H.timer:stop()
-			vim.defer_fn(function()
-				H.finished_callback()
-			end, 500)
-			return
-		end
-
-		step = step + 1
-		wait_time = tick_ms --animation_func(step, n_steps)
-
-		-- Repeat value of `timer` seems to be rounded down to milliseconds. This
-		-- means that values less than 1 will lead to timer stop repeating. Instead
-		-- call next step function directly.
-		H.timer:set_repeat(wait_time)
-
-		-- Restart `wait_time` only if it is actually used. Do this accounting
-		-- actually set repeat time.
-		-- wait_time = wait_time - H.timer:get_repeat()
-
-		-- Usage of `again()` is needed to overcome the fact that it is called
-		-- inside callback and to restart initial timer. Mainly this is needed
-		-- only in case of transition from 'non-repeating' timer to 'repeating'
-		-- one in case of complex animation functions. See
-		-- https://docs.libuv.org/en/v1.x/timer.html#api
-		H.timer:again()
-	end)
-
-	local draw_reel_step_vb = function(step, n_steps)
-		vim.notify("step vb ran!")
-		vim.api.nvim_out_write("test")
-	end
-
-	local draw_reel_step = vim.schedule_wrap(function()
-		vim.notify("draw_reel_step, n_steps=" .. n_reel_steps .. ",step=" .. reel_step)
-		local all_extmarks = extmark_ids.all()
-		local succ = draw_func_reel(og_line - reel_step, og_col + reel_step, all_extmarks[reel_step + 1])
-
-		if reel_step >= n_reel_steps - 1 then -- TODO code re-use here
-			vim.notify("Completed animation")
-			H.current.draw_status = "finished"
-			H.timer:stop()
-			return
-		end
-
-		reel_step = reel_step + 1
-		wait_time = tick_ms --animation_func(step, n_steps)
-		H.timer:set_repeat(wait_time)
-
-		-- Stop the timer, and if it is repeating restart it using the
-		-- repeat value as the timeout. If the timer has never been
-		-- started before it raises EINVAL.
-		H.timer:again()
-	end)
-
-	local reel_callback = function()
-		vim.notify("reel_callback, n_reel_steps=" .. n_reel_steps)
-		-- 		local original_virtualedit = vim.wo.virtualedit
-		-- 		vim.wo.virtualedit = "all"
-		--
-		-- 		-- Start non-repeating timer without callback execution. This shouldn't be
-		-- 		-- `timer:start(0, 0, draw_step)` because it will execute `draw_step` on the
-		-- 		-- next redraw (flickers on window scroll).
-		-- H.timer:start(10000000, 0, draw_reel_step_vb)
-		H.timer:start(10000000, 0, draw_reel_step)
-		--
-		-- 		-- Draw step zero (at origin) immediately
-		draw_reel_step()
-		--
-		-- 		vim.wo.virtualedit = original_virtualedit
-	end
-	--
-	-- 	-- Start non-repeating timer without callback execution. This shouldn't be
-	-- 	-- `timer:start(0, 0, draw_step)` because it will execute `draw_step` on the
-	-- 	-- next redraw (flickers on window scroll).
-	-- 	--
-	-- 	--(timeout, repeat, callback)
-	H.timer:start(10000000, 0, draw_step)
-	--
-	H.finished_callback = reel_callback
-
-	-- Draw step zero (at origin) immediately
-	draw_step()
-end
-
-Grappler.operator2 = function()
-	-- function findTextAboveCursor()
-	local current_line = vim.api.nvim_win_get_cursor(0)[1]
-	local cursor_col = vim.api.nvim_win_get_cursor(0)[2]
-	local max_line = vim.api.nvim_buf_line_count(0)
-
-	for line = current_line - 1, 1, -1 do
-		local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1]
-		if not line_content then
-			break
-		end
-
-		if #line_content >= cursor_col then
-			vim.api.nvim_win_set_cursor(0, { line, cursor_col })
-			return
-		end
-	end
-
-	-- If no suitable line is found, stay on the current line
-	vim.api.nvim_win_set_cursor(0, { current_line, 1 })
 end
 
 --- Function for motion mappings
@@ -779,7 +695,7 @@ end
 H.default_config = Grappler.config
 
 -- Namespace for drawing vertical line
-H.ns_id = vim.api.nvim_create_namespace("Grappler")
+H.ns_id = vim.api.nvim_create_namespace("MiniIndentscope")
 
 -- Timer for doing animation
 H.timer = vim.loop.new_timer()
@@ -877,18 +793,16 @@ H.setup_config = function(config)
 		draw = { config.draw, "table" },
 		mappings = { config.mappings, "table" },
 		options = { config.options, "table" },
-		symbols = { config.symbols, "string" },
+		symbol = { config.symbol, "string" },
 	})
 
 	vim.validate({
 		["draw.delay"] = { config.draw.delay, "number" },
-		-- ["draw.animation"] = { config.draw.animation, "function" },
+		["draw.animation"] = { config.draw.animation, "function" },
 		["draw.priority"] = { config.draw.priority, "number" },
-		["draw.tick_ms"] = { config.draw.tick_ms, "number" },
 
 		["mappings.object_scope"] = { config.mappings.object_scope, "string" },
 		["mappings.object_scope_with_border"] = { config.mappings.object_scope_with_border, "string" },
-		-- ["mappings.goto_temp"] = { config.mappings.goto_temp, "string" },
 		["mappings.goto_top"] = { config.mappings.goto_top, "string" },
 		["mappings.goto_bottom"] = { config.mappings.goto_bottom, "string" },
 
@@ -907,23 +821,22 @@ H.apply_config = function(config)
 	local maps = config.mappings
 
   --stylua: ignore start
-  H.map('n', maps.goto_top, [[<Cmd>lua Grappler.operator('temp', true)<CR>]], { desc = 'Go to indent scope top' })
-  -- H.map('n', maps.goto_temp, [[<Cmd>lua Grappler.operator('temp', true)<CR>]], { desc = 'Go to indent scope top' })
-  H.map('n', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom', true)<CR>]], { desc = 'Go to indent scope bottom' })
+  H.map('n', maps.goto_top, [[<Cmd>lua MiniIndentscope.operator('top', true)<CR>]], { desc = 'Go to indent scope top' })
+  H.map('n', maps.goto_bottom, [[<Cmd>lua MiniIndentscope.operator('bottom', true)<CR>]], { desc = 'Go to indent scope bottom' })
 
-  H.map('n', maps.goto_left, [[<Cmd>lua Grappler.operator('left', false)<CR>]], { desc = 'Go to indent scope left' })
-  H.map('n', maps.goto_right, [[<Cmd>lua Grappler.operator('right', false)<CR>]], { desc = 'Go to indent scope right' })
-  -- H.map('n', maps.goto_, [[<Cmd>lua Grappler.operator('left', true)<CR>]], { desc = 'Go to indent scope bottom' })
+  H.map('n', maps.goto_left, [[<Cmd>lua MiniIndentscope.operator('left', false)<CR>]], { desc = 'Go to indent scope left' })
+  H.map('n', maps.goto_right, [[<Cmd>lua MiniIndentscope.operator('right', false)<CR>]], { desc = 'Go to indent scope right' })
+  -- H.map('n', maps.goto_, [[<Cmd>lua MiniIndentscope.operator('left', true)<CR>]], { desc = 'Go to indent scope bottom' })
 
-  H.map('x', maps.goto_top, [[<Cmd>lua Grappler.operator('top')<CR>]], { desc = 'Go to indent scope top' })
-  H.map('x', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
-  H.map('x', maps.object_scope, '<Cmd>lua Grappler.textobject(false)<CR>', { desc = 'Object scope' })
-  H.map('x', maps.object_scope_with_border, '<Cmd>lua Grappler.textobject(true)<CR>', { desc = 'Object scope with border' })
+  H.map('x', maps.goto_top, [[<Cmd>lua MiniIndentscope.operator('top')<CR>]], { desc = 'Go to indent scope top' })
+  H.map('x', maps.goto_bottom, [[<Cmd>lua MiniIndentscope.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
+  H.map('x', maps.object_scope, '<Cmd>lua MiniIndentscope.textobject(false)<CR>', { desc = 'Object scope' })
+  H.map('x', maps.object_scope_with_border, '<Cmd>lua MiniIndentscope.textobject(true)<CR>', { desc = 'Object scope with border' })
 
-  H.map('o', maps.goto_top, [[<Cmd>lua Grappler.operator('top')<CR>]], { desc = 'Go to indent scope top' })
-  H.map('o', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
-  H.map('o', maps.object_scope, '<Cmd>lua Grappler.textobject(false)<CR>', { desc = 'Object scope' })
-  H.map('o', maps.object_scope_with_border, '<Cmd>lua Grappler.textobject(true)<CR>', { desc = 'Object scope with border' })
+  H.map('o', maps.goto_top, [[<Cmd>lua MiniIndentscope.operator('top')<CR>]], { desc = 'Go to indent scope top' })
+  H.map('o', maps.goto_bottom, [[<Cmd>lua MiniIndentscope.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
+  H.map('o', maps.object_scope, '<Cmd>lua MiniIndentscope.textobject(false)<CR>', { desc = 'Object scope' })
+  H.map('o', maps.object_scope_with_border, '<Cmd>lua MiniIndentscope.textobject(true)<CR>', { desc = 'Object scope with border' })
 	--stylua: ignore start
 end
 
@@ -952,52 +865,6 @@ H.get_line_indent = function(line, opts)
 	end
 
 	return res
-end
-
-H.UR_ray = function(line, col)
-	local target_line, target_col = line, col
-	local original_line, original_col = line, col
-	-- vim.notify("setup from line: " .. line)
-	line = line - 1
-	col = col + 1
-
-	local max_col = vim.fn.winwidth(0) - 7
-	-- local found_target = false;
-	local not_done = true
-	while not_done do
-		-- vim.notify("loop: move up to line: " .. line)
-		if line < 1 then
-			target_line = 1 -- 1 indexed ughhh
-			target_col = col -- TODO break
-			not_done = false
-		end
-		if col > max_col then
-			target_col = col
-			target_line = line -- TODO break
-			not_done = false
-		end
-		--                                              buf, start,  end, strict_indexing (whether out of bounds should be an error)
-
-		if not_done == true then
-			local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1]
-			if #line_content >= col then
-				target_col = col
-				target_line = line
-				not_done = false
-			end
-		end
-		line = line - 1
-		col = col + 1
-	end
-	-- vim.notify(
-	-- 	"found target (line:" .. target_line .. ",col:" .. target_col .. ") @ dist." .. (target_line - original_line)
-	-- )
-	return {
-		found_target = true,
-		target = { line = target_line, col = target_col },
-		src = { line = original_line, col = original_col },
-		direct = "TR",
-	}
 end
 
 H.cast_ray = function(line, indent, direction, opts)
@@ -1048,16 +915,126 @@ H.scope_has_intersect = function(scope_1, scope_2)
 		or (body_1.top <= body_2.top and body_2.top <= body_1.bottom)
 end
 
-H.undraw_chains = function(buf_id)
-	-- Don't operate outside of current event if able to verify
-	-- if opts.event_id and opts.event_id ~= H.current.event_id then
-	-- 	return
-	-- end
+-- Indicator ------------------------------------------------------------------
+--- Compute indicator of scope to be displayed
+---
+--- Indicator is visual representation of scope in current window view using
+--- extmarks. Currently only needed because Neovim can't correctly process
+--- horizontal window scroll (Neovim issue:
+--- https://github.com/neovim/neovim/issues/14050)
+---
+---@return table|nil Table with indicator info or empty one in case indicator
+---   shouldn't be drawn.
+---@private
+H.indicator_compute = function(scope)
+	scope = scope or H.current.scope
+	local indent = H.scope_get_draw_indent(scope)
 
-	pcall(vim.api.nvim_buf_clear_namespace, buf_id or 0, H.ns_id, 0, -1)
+	-- Don't draw indicator that should be outside of screen. This condition is
+	-- (perpusfully) "responsible" for not drawing indicator spanning whole file.
+	if indent < 0 then
+		return {}
+	end
 
-	H.current.draw_status = "none"
-	H.current.scope = {}
+	-- Text indentation should depend on current window view because it will use
+	-- `virt_text_win_col` attribute of extmark options (the only way to reliably
+	-- put it anywhere on screen; important to show properly on empty lines).
+	local col = indent - vim.fn.winsaveview().leftcol
+	if col < 0 then
+		return {}
+	end
+
+	-- Pick highlight group based on if indent is a multiple of shiftwidth.
+	-- This adds visual indicator of whether indent is "correct".
+	local hl_group = (indent % vim.fn.shiftwidth() == 0) and "GrapplerSymbol" or "GrapplerSymbolOff"
+	local virt_text = { { H.get_config().symbol, hl_group } }
+
+	return {
+		buf_id = vim.api.nvim_get_current_buf(),
+		virt_text = virt_text,
+		virt_text_win_col = col,
+		top = scope.body.top,
+		bottom = scope.body.bottom,
+	}
+end
+
+-- Drawing --------------------------------------------------------------------
+H.draw_scope = function(scope, opts)
+	scope = scope or {}
+	opts = opts or {}
+
+	local indicator = H.indicator_compute(scope)
+
+	-- Don't draw anything if nothing to be displayed
+	if indicator.virt_text == nil or #indicator.virt_text == 0 then
+		H.current.draw_status = "finished"
+		return
+	end
+
+	-- Make drawing function
+	local draw_fun = H.make_draw_function(indicator, opts)
+
+	-- Perform drawing
+	H.current.draw_status = "drawing"
+	H.draw_indicator_animation(indicator, draw_fun, opts.animation_fun)
+end
+
+H.draw_indicator_animation = function(indicator, draw_fun, animation_fun)
+	-- Draw from origin (cursor line but wihtin indicator range)
+	local top, bottom = indicator.top, indicator.bottom
+	local origin = math.min(math.max(vim.fn.line("."), top), bottom)
+
+	local step = 0
+	local n_steps = math.max(origin - top, bottom - origin)
+	local wait_time = 0
+
+	local draw_step
+	draw_step = vim.schedule_wrap(function()
+		-- Check for not drawing outside of interval is done inside `draw_fun`
+		local success = draw_fun(origin - step)
+		if step > 0 then
+			success = success and draw_fun(origin + step)
+		end
+
+		if not success or step == n_steps then
+			H.current.draw_status = step == n_steps and "finished" or H.current.draw_status
+			H.timer:stop()
+			return
+		end
+
+		step = step + 1
+		wait_time = wait_time + animation_fun(step, n_steps)
+
+		-- Repeat value of `timer` seems to be rounded down to milliseconds. This
+		-- means that values less than 1 will lead to timer stop repeating. Instead
+		-- call next step function directly.
+		if wait_time < 1 then
+			H.timer:set_repeat(0)
+			-- Use `return` to make this proper "tail call"
+			return draw_step()
+		else
+			H.timer:set_repeat(wait_time)
+
+			-- Restart `wait_time` only if it is actually used. Do this accounting
+			-- actually set repeat time.
+			wait_time = wait_time - H.timer:get_repeat()
+
+			-- Usage of `again()` is needed to overcome the fact that it is called
+			-- inside callback and to restart initial timer. Mainly this is needed
+			-- only in case of transition from 'non-repeating' timer to 'repeating'
+			-- one in case of complex animation functions. See
+			-- https://docs.libuv.org/en/v1.x/timer.html#api
+			H.timer:again()
+		end
+	end)
+
+	-- Start non-repeating timer without callback execution. This shouldn't be
+	-- `timer:start(0, 0, draw_step)` because it will execute `draw_step` on the
+	-- next redraw (flickers on window scroll).
+	H.timer:start(10000000, 0, draw_step)
+
+	-- Draw step zero (at origin) immediately
+	draw_step()
 end
 
 H.undraw_scope = function(opts)
@@ -1080,35 +1057,40 @@ H.make_autodraw_opts = function(scope)
 		event_id = H.current.event_id,
 		type = "animation",
 		delay = config.draw.delay,
-		-- animation_func = config.draw.animation,
-		tick_ms = config.draw.tick_ms,
+		animation_fun = config.draw.animation,
 		priority = config.draw.priority,
 	}
+
+	if H.current.draw_status == "none" then
+		return res
+	end
+
+	-- Draw immediately scope which intersects (same indent, overlapping ranges)
+	-- currently drawn or finished. This is more natural when typing text.
+	if H.scope_has_intersect(scope, H.current.scope) then
+		res.type = "immediate"
+		res.delay = 0
+		res.animation_fun = Grappler.gen_animation.none()
+		return res
+	end
 
 	return res
 end
 
-H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
-	local current_event_id = opts.event_id
-	local hl_group = "GrapplerSymbol"
+H.make_draw_function = function(indicator, opts)
+	local extmark_opts = {
+		hl_mode = "combine",
+		priority = opts.priority,
+		right_gravity = false,
+		virt_text = indicator.virt_text,
+		virt_text_win_col = indicator.virt_text_win_col,
+		virt_text_pos = "overlay",
+	}
 
-	local virt_text
-	if hook == true then
-		-- vim.notify("hook")
-		virt_text = { { "X", hl_group } }
-	else
-		-- vim.notify("chain")
-		virt_text = { { "╱", hl_group } }
-	end
-	return function(line, col, extmark_id)
-		local extmark_opts = {
-			hl_mode = "combine",
-			priority = opts.priority,
-			right_gravity = false,
-			virt_text = virt_text,
-			virt_text_win_col = col,
-			virt_text_pos = "overlay",
-		}
+	local current_event_id = opts.event_id
+
+	return function(l)
+		-- Don't draw if outdated
 		if H.current.event_id ~= current_event_id and current_event_id ~= nil then
 			return false
 		end
@@ -1118,40 +1100,169 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
 			return false
 		end
 
-		if reel then
-			local succ = pcall(vim.api.nvim_buf_del_extmark, buf_id, H.ns_id, extmark_id)
-			if succ then
-				-- vim.notify("deleted extmark")
-				vim.api.nvim_win_set_cursor(0, { line, col })
-				return true
-			end
-			vim.notify("failed to del extmark w/ id (lemmeguess_nil_lol:" .. extmark_id .. ")")
-			return false
-		else
-			-- return pcall(vim.api.nvim_buf_set_extmark, buf_id, H.ns_id, line - 1, 0, extmark_opts)
-			local succ, id = pcall(vim.api.nvim_buf_set_extmark, buf_id, H.ns_id, line - 1, 0, extmark_opts)
-			if succ then
-				return id
-			else
-				vim.notify("failed to set extmark")
-				return false
-			end
+		-- Don't put extmark outside of indicator range
+		if not (indicator.top <= l and l <= indicator.bottom) then
+			return true
 		end
+
+		return pcall(vim.api.nvim_buf_set_extmark, indicator.buf_id, H.ns_id, l - 1, 0, extmark_opts)
 	end
 end
--- Parameters:
--- {buffer} Buffer handle, or 0 for current buffer
--- {ns_id} Namespace id from nvim_create_namespace() or -1 for all namespaces
--- {start} Start of range: a 0-indexed (row, col) or valid extmark id (whose position defines the bound). api-indexing
--- {end} End of range (inclusive): a 0-indexed (row, col) or valid extmark id (whose position defines the bound). api-indexing
--- {opts} Optional parameters. Keys:
--- limit: Maximum number of marks to return
--- details: Whether to include the details dict
--- hl_name: Whether to include highlight group name instead of id, true if omitted
--- overlap: Also include marks which overlap the range, even if their start position is less than start
--- type: Filter marks by type: "highlight", "sign", "virt_text" and "virt_lines"
--- Return:
--- List of [extmark_id, row, col] tuples in "traversal order".                                                                     start,    end
+
+-- Animations -----------------------------------------------------------------
+--- Imitate common power easing function
+---
+--- Every step is preceeded by waiting time decreasing/increasing in power
+--- series fashion (`d` is "delta", ensures total duration time):
+--- - "in":  d*n^p; d*(n-1)^p; ... ; d*2^p;     d*1^p
+--- - "out": d*1^p; d*2^p;     ... ; d*(n-1)^p; d*n^p
+--- - "in-out": "in" until 0.5*n, "out" afterwards
+---
+--- This way it imitates `power + 1` common easing function because animation
+--- progression behaves as sum of `power` elements.
+---
+---@param power number Power of series.
+---@param opts table Options from `MiniIndentscope.gen_animation` entry.
+---@private
+H.animation_arithmetic_powers = function(power, opts)
+	-- Sum of first `n_steps` natural numbers raised to `power`
+	local arith_power_sum = ({
+		[0] = function(n_steps)
+			return n_steps
+		end,
+		[1] = function(n_steps)
+			return n_steps * (n_steps + 1) / 2
+		end,
+		[2] = function(n_steps)
+			return n_steps * (n_steps + 1) * (2 * n_steps + 1) / 6
+		end,
+		[3] = function(n_steps)
+			return n_steps ^ 2 * (n_steps + 1) ^ 2 / 4
+		end,
+	})[power]
+
+	-- Function which computes common delta so that overall duration will have
+	-- desired value (based on supplied `opts`)
+	local duration_unit, duration_value = opts.unit, opts.duration
+	local make_delta = function(n_steps, is_in_out)
+		local total_time = duration_unit == "total" and duration_value or (duration_value * n_steps)
+		local total_parts
+		if is_in_out then
+			-- Examples:
+			-- - n_steps=5: 3^d, 2^d, 1^d, 2^d, 3^d
+			-- - n_steps=6: 3^d, 2^d, 1^d, 1^d, 2^d, 3^d
+			total_parts = 2 * arith_power_sum(math.ceil(0.5 * n_steps)) - (n_steps % 2 == 1 and 1 or 0)
+		else
+			total_parts = arith_power_sum(n_steps)
+		end
+		return total_time / total_parts
+	end
+
+	return ({
+		["in"] = function(s, n)
+			return make_delta(n) * (n - s + 1) ^ power
+		end,
+		["out"] = function(s, n)
+			return make_delta(n) * s ^ power
+		end,
+		["in-out"] = function(s, n)
+			local n_half = math.ceil(0.5 * n)
+			local s_halved
+			if n % 2 == 0 then
+				s_halved = s <= n_half and (n_half - s + 1) or (s - n_half)
+			else
+				s_halved = s < n_half and (n_half - s + 1) or (s - n_half + 1)
+			end
+			return make_delta(n, true) * s_halved ^ power
+		end,
+	})[opts.easing]
+end
+
+--- Imitate common exponential easing function
+---
+--- Every step is preceeded by waiting time decreasing/increasing in geometric
+--- progression fashion (`d` is 'delta', ensures total duration time):
+--- - 'in':  (d-1)*d^(n-1); (d-1)*d^(n-2); ...; (d-1)*d^1;     (d-1)*d^0
+--- - 'out': (d-1)*d^0;     (d-1)*d^1;     ...; (d-1)*d^(n-2); (d-1)*d^(n-1)
+--- - 'in-out': 'in' until 0.5*n, 'out' afterwards
+---
+---@param opts table Options from `MiniIndentscope.gen_animation` entry.
+---@private
+H.animation_geometrical_powers = function(opts)
+	-- Function which computes common delta so that overall duration will have
+	-- desired value (based on supplied `opts`)
+	local duration_unit, duration_value = opts.unit, opts.duration
+	local make_delta = function(n_steps, is_in_out)
+		local total_time = duration_unit == "step" and (duration_value * n_steps) or duration_value
+		-- Exact solution to avoid possible (bad) approximation
+		if n_steps == 1 then
+			return total_time + 1
+		end
+		if is_in_out then
+			local n_half = math.ceil(0.5 * n_steps)
+			-- Example for n_steps=6:
+			-- Steps: (d-1)*d^2, (d-1)*d^1, (d-1)*d^0, (d-1)*d^0, (d-1)*d^1, (d-1)*d^2
+			-- Sum: 2 * (d - 1) * (d^0 + d^1 + d^2) = 2 * (d^3 - 1)
+			-- Solution: 2 * (d^3 - 1) = total_time =>
+			--   d = math.pow(0.5 * total_time + 1, 1 / 3)
+			--
+			-- Example for n_steps=5:
+			-- Steps: (d-1)*d^2, (d-1)*d^1, (d-1)*d^0, (d-1)*d^1, (d-1)*d^2
+			-- Sum: 2 * (d - 1) * (d^0 + d^1 + d^2) - (d - 1) = 2 * (d^3 - 1) - (d - 1)
+			-- Solution: 2 * (d^3 - 1) - (d - 1) = total_time =>
+			--   As there is no general explicit solution, use approximation =>
+			--   (Exact solution without `- (d-1)`):
+			--     d_0 = math.pow(0.5 * total_time + 1, 1 / 3);
+			--   (Correction by solving exactly withtou `- (d-1)` for
+			--   `total_time_corr = total_time + (d_0 - 1)`):
+			--     d_1 = math.pow(0.5 * total_time_corr + 1, 1 / 3)
+			if n_steps % 2 == 1 then
+				total_time = total_time + math.pow(0.5 * total_time + 1, 1 / n_half) - 1
+			end
+			return math.pow(0.5 * total_time + 1, 1 / n_half)
+		end
+		return math.pow(total_time + 1, 1 / n_steps)
+	end
+
+	return ({
+		["in"] = function(s, n)
+			local delta = make_delta(n)
+			return (delta - 1) * delta ^ (n - s)
+		end,
+		["out"] = function(s, n)
+			local delta = make_delta(n)
+			return (delta - 1) * delta ^ (s - 1)
+		end,
+		["in-out"] = function(s, n)
+			local n_half, delta = math.ceil(0.5 * n), make_delta(n, true)
+			local s_halved
+			if n % 2 == 0 then
+				s_halved = s <= n_half and (n_half - s) or (s - n_half - 1)
+			else
+				s_halved = s < n_half and (n_half - s) or (s - n_half)
+			end
+			return (delta - 1) * delta ^ s_halved
+		end,
+	})[opts.easing]
+end
+
+H.normalize_animation_opts = function(x)
+	x = vim.tbl_deep_extend("force", { easing = "in-out", duration = 20, unit = "step" }, x or {})
+
+	if not vim.tbl_contains({ "in", "out", "in-out" }, x.easing) then
+		H.error([[In `gen_animation` option `easing` should be one of 'in', 'out', or 'in-out'.]])
+	end
+
+	if type(x.duration) ~= "number" or x.duration < 0 then
+		H.error([[In `gen_animation` option `duration` should be a positive number.]])
+	end
+
+	if not vim.tbl_contains({ "total", "step" }, x.unit) then
+		H.error([[In `gen_animation` option `unit` should be one of 'step' or 'total'.]])
+	end
+
+	return x
+end
 
 -- Utilities ------------------------------------------------------------------
 H.error = function(msg)
