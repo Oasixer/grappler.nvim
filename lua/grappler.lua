@@ -153,30 +153,30 @@ Grappler.setup = function(config)
 
 	-- Setup config
 	config = H.setup_config(config)
-	vim.notify("setup config")
+	print("setup config")
 
 	-- Apply config
 	H.apply_config(config)
 
 	-- Module behavior
-	vim.api.nvim_exec(
-		[[augroup Grappler
-        au!
-        au CursorMoved,CursorMovedI                          * lua Grappler.auto_draw({ lazy = true })
-        au TextChanged,TextChangedI,TextChangedP,WinScrolled * lua Grappler.auto_draw()
-      augroup END]],
-		false
-	)
+	-- vim.api.nvim_exec(
+	-- 	[[augroup Grappler
+	--        au!
+	--        au CursorMoved,CursorMovedI                          * lua Grappler.auto_draw({ lazy = true })
+	--        au TextChanged,TextChangedI,TextChangedP,WinScrolled * lua Grappler.auto_draw()
+	--      augroup END]],
+	-- 	false
+	-- )
 
-	if vim.fn.exists("##ModeChanged") == 1 then
-		vim.api.nvim_exec(
-			-- Call `auto_draw` on mode change to respect `miniindentscope_disable`
-			[[augroup Grappler
-          au ModeChanged *:* lua Grappler.auto_draw({ lazy = true })
-        augroup END]],
-			false
-		)
-	end
+	-- if vim.fn.exists("##ModeChanged") == 1 then
+	-- 	vim.api.nvim_exec(
+	-- 		-- Call `auto_draw` on mode change to respect `miniindentscope_disable`
+	-- 		[[augroup Grappler
+	--          au ModeChanged *:* lua Grappler.auto_draw({ lazy = true })
+	--        augroup END]],
+	-- 		false
+	-- 	)
+	-- end
 
 	-- Create highlighting
 	vim.api.nvim_exec(
@@ -258,189 +258,30 @@ Grappler.config = {
 	-- Module mappings. Use `''` (empty string) to disable one.
 	mappings = {
 		-- Textobjects
-		object_scope = "ii",
-		object_scope_with_border = "ai",
+		-- object_scope = "ii",
+		-- object_scope_with_border = "ai",
 
 		-- Motions (jump to respective border line; if not present - body line)
-		goto_left = "[l",
-		goto_right = "[r",
-		goto_top = "[i",
-		goto_bottom = "]i",
+		left = "sh",
+		right = "sl",
+		up = "sk",
+		down = "sj",
+		up_right = "so",
+		up_left = "si",
+		down_left = "sI",
+		down_right = "sO",
+
+		toggle_grapple_mode = "<A-g>",
 	},
 
 	-- Options which control scope computation
-	options = {
-		-- Type of scope's border: which line(s) with smaller indent to
-		-- categorize as border. Can be one of: 'both', 'top', 'bottom', 'none'.
-		border = "both",
-
-		-- Whether to use cursor column when computing reference indent.
-		-- Useful to see incremental scopes with horizontal cursor movements.
-		indent_at_cursor = true,
-
-		-- Whether to first check input line to be a border of adjacent scope.
-		-- Use it if you want to place cursor on function header to get scope of
-		-- its body.
-		try_as_border = false,
-	},
+	options = {},
 
 	-- Which character to use for drawing scope indicator
 	-- symbol = "╎",
 	symbols = "/D",
 }
---minidoc_afterlines_end
 
--- Module functionality =======================================================
---- Compute indent scope
----
---- Indent scope (or just "scope") is a maximum set of consecutive lines which
---- contains certain reference line (cursor line by default) and every member
---- has indent not less than certain reference indent ("indent at column" by
---- default). Here "indent at column" means minimum between input column value
---- and indent of reference line. When using cursor column, this allows for a
---- useful interactive view of nested indent scopes by making horizontal
---- movements within line.
----
---- Options controlling actual computation is taken from these places in order:
---- - Argument `opts`. Use it to ensure independence from other sources.
---- - Buffer local variable `vim.b.miniindentscope_config` (`options` field).
----   Useful to define local behavior (for example, for a certain filetype).
---- - Global options from |MiniIndentscope.config|.
----
---- Algorithm overview~
----
---- - Compute reference "indent at column". Reference line is an input `line`
----   which might be modified to one of its neighbors if `try_as_border` option
----   is `true`: if it can be viewed as border of some neighbor scope, it will.
---- - Process upwards and downwards from reference line to search for line with
----   indent strictly less than reference one. This is like casting rays up and
----   down from reference line and reference indent until meeting "a wall"
----   (character to the right of indent or buffer edge). Latest line before
----   meeting is a respective end of scope body. It always exists because
----   reference line is a such one.
---- - Based on top and bottom lines with strictly lower indent, construct
----   scopes's border. The way it is computed is decided based on `border`
----   option (see |MiniIndentscope.config| for more information).
---- - Compute border indent as maximum indent of border lines (or reference
----   indent minus one in case of no border). This is used during drawing
----   visual indicator.
----
---- Indent computation~
----
---- For every line indent is intended to be computed unambiguously:
---- - For "normal" lines indent is an output of |indent()|.
---- - Indent is `-1` for imaginary lines 0 and past last line.
---- - For blank and empty lines indent is computed based on previous
----   (|prevnonblank()|) and next (|nextnonblank()|) non-blank lines. The way
----   it is computed is decided based on `border` in order to not include blank
----   lines at edge of scope's body if there is no border there. See
----   |MiniIndentscope.config| for a details example.
----
--- MiniIndentscope.goto_line = function(line, col, opts)
--- 	opts = H.get_config({ options = opts }).options
--- 	-- Compute default `line` and\or `col`
--- 	if not (line and col) then
--- 		local curpos = vim.fn.getcurpos()
---
--- 		line = line or curpos[2]
--- 		line = opts.try_as_border and H.border_correctors[opts.border](line, opts) or line
---
--- 		-- Use `curpos[5]` (`curswant`, see `:h getcurpos()`) to account for blank
--- 		-- and empty lines.
--- 		col = col or (opts.indent_at_cursor and curpos[5] or math.huge)
--- 	end
---
--- 	-- Make early return
--- 	local body = { indent = indent }
--- 	if indent <= 0 then
--- 		body.top, body.bottom, body.indent = 1, vim.fn.line("$"), line_indent
--- 	else
--- 		local up_min_indent, down_min_indent
--- 		body.top, up_min_indent = H.cast_ray(line, indent, "up", opts)
--- 		body.bottom, down_min_indent = H.cast_ray(line, indent, "down", opts)
--- 		body.indent = math.min(line_indent, up_min_indent, down_min_indent)
--- 	end
--- 	-- return {
--- 	-- 	body = body,
--- 	-- 	border = H.border_from_body[opts.border](body, opts),
--- 	-- 	buf_id = vim.api.nvim_get_current_buf(),
--- 	-- 	reference = { line = line, column = col, indent = indent },
--- 	-- }
--- end
-
----@param line number|nil Input line number (starts from 1). Can be modified to a
----   neighbor if `try_as_border` is `true`. Default: cursor line.
----@param col number|nil Column number (starts from 1). Default: if
----   `indent_at_cursor` option is `true` - cursor column from `curswant` of
----   |getcurpos()| (allows for more natural behavior on empty lines);
----   `math.huge` otherwise in order to not incorporate cursor in computation.
----@param opts table|nil Options to override global or buffer local ones (see
----   |MiniIndentscope.config|).
----
----@return table Table with scope information:
----   - <body> - table with <top> (top line of scope, inclusive), <bottom>
----     (bottom line of scope, inclusive), and <indent> (minimum indent withing
----     scope) keys. Line numbers start at 1.
----   - <border> - table with <top> (line of top border, might be `nil`),
----     <bottom> (line of bottom border, might be `nil`), and <indent> (indent
----     of border) keys. Line numbers start at 1.
----   - <buf_id> - identifier of current buffer.
----   - <reference> - table with <line> (reference line), <column> (reference
----     column), and <indent> ("indent at column") keys.
---
-Grappler.get_scope = function(line, col, opts)
-	opts = H.get_config({ options = opts }).options
-
-	-- Compute default `line` and\or `col`
-	if not (line and col) then
-		local curpos = vim.fn.getcurpos()
-
-		line = line or curpos[2]
-		line = opts.try_as_border and H.border_correctors[opts.border](line, opts) or line
-
-		-- Use `curpos[5]` (`curswant`, see `:h getcurpos()`) to account for blank
-		-- and empty lines.
-		col = col or (opts.indent_at_cursor and curpos[5] or math.huge)
-	end
-
-	-- Compute "indent at column"
-	local line_indent = H.get_line_indent(line, opts)
-	local indent = math.min(col, line_indent)
-
-	-- Make early return
-	local body = { indent = indent }
-	if indent <= 0 then
-		body.top, body.bottom, body.indent = 1, vim.fn.line("$"), line_indent
-	else
-		local up_min_indent, down_min_indent
-		body.top, up_min_indent = H.cast_ray(line, indent, "up", opts)
-		body.bottom, down_min_indent = H.cast_ray(line, indent, "down", opts)
-		body.indent = math.min(line_indent, up_min_indent, down_min_indent)
-	end
-
-	return {
-		body = body,
-		border = H.border_from_body[opts.border](body, opts),
-		buf_id = vim.api.nvim_get_current_buf(),
-		reference = { line = line, column = col, indent = indent },
-	}
-end
-
---- Auto draw scope indicator based on movement events
----
---- Designed to be used with |autocmd|. No need to use it directly, everything
---- is setup in |MiniIndentscope.setup|.
----
----@param opts table|nil Options.
-Grappler.auto_draw = function(opts)
-	-- vim.notify("hi")
-end
--- TODO: start here
-
---- Undraw currently visible scope manually
-Grappler.undraw = function()
-	H.undraw_scope()
-end
 function array_concat(...)
 	local t = {}
 	for n = 1, select("#", ...) do
@@ -455,59 +296,23 @@ function array_concat(...)
 	end
 	return t
 end
--- Grappler.gen_animation.linear2 = function(duration)
--- 	return function(step, n_steps)
--- 		return (duration / n_steps) * step
--- 	end
--- end
 
---- Move cursor within scope
----
---- Cursor is placed on a first non-blank character of target line.
----
----@param side string One of "top" or "bottom".
----@param use_border boolean|nil Whether to move to border or withing scope's body.
----   If particular border is absent, body is used.
----@param scope table|nil Scope to use. Default: output of |MiniIndentscope.get_scope()|.
-Grappler.move_cursor = function(side, use_border, scope)
-	scope = scope or Grappler.get_scope()
-
-	-- This defaults to body's side if it is not present in border
-	local target_line = 0
-	if side == "left" then
-		local original_line = vim.fn.line(".")
-
-		target_line = use_border and scope.border["bottom"] or scope.body["bottom"]
-		target_line = math.min(math.max(target_line, 1), vim.fn.line("$"))
-
-		-- jump to end of scope (line), and 0 (far left column)
-		vim.api.nvim_win_set_cursor(0, { target_line, 0 })
-
-		-- bring cursor to our actual target
-		vim.cmd("normal! ^")
-
-		local correct_column = vim.fn.col(".")
-
-		vim.api.nvim_win_set_cursor(0, { original_line, correct_column })
-		vim.cmd("normal! h") -- move left one
-	else
-		target_line = use_border and scope.border[side] or scope.body[side]
-		target_line = math.min(math.max(target_line, 1), vim.fn.line("$"))
-		vim.api.nvim_win_set_cursor(0, { target_line, 0 })
-		-- Move to first non-blank character to allow chaining scopes
-		vim.cmd("normal! ^")
-	end
+Grappler.toggle_grapple_mode = function() -- grapple()
 end
 
-Grappler.operatorUR = function()
-	vim.notify("hi operatorUR")
+Grappler.clear_symbols = function() -- grapple()
+end
+
+Grappler.grapple = function(direct) -- grapple()
+	print("grapple")
 	local config = H.get_config()
 	local tick_ms = config.draw.tick_ms
 	local buf_id = vim.api.nvim_get_current_buf()
 	-- local delays = {}
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local line, col = cursor[1], cursor[2]
-	local res = H.UR_ray(line, col)
+	local res = H.ray_cast(line, col, direct)
+	print("res; " .. serializeTable(res))
 
 	local draw_opts = {
 		event_id = H.current.event_id,
@@ -517,24 +322,31 @@ Grappler.operatorUR = function()
 		priority = config.draw.priority,
 	}
 	if not res.found_target then
-		vim.notify("no target found")
+		print("no target found")
 		return
 	end
 
 	-- todo use a sensible opts structure or something...                 chains, reel
-	local draw_func_chain = H.make_draw_function2(buf_id, draw_opts, "UR", false, false)
-	local draw_func_hook = H.make_draw_function2(buf_id, draw_opts, "UR", true, false)
-	local draw_func_reel = H.make_draw_function2(buf_id, draw_opts, "UR", false, true)
+	local draw_func_chain = H.make_draw_function2(buf_id, draw_opts, direct, false, false)
+	local draw_func_hook = H.make_draw_function2(buf_id, draw_opts, direct, true, false)
+	local draw_func_reel = H.make_draw_function2(buf_id, draw_opts, direct, false, true)
 
 	-- H.normalize_animation_opts()
 	-- local animation_func = config.draw.animation --Grappler.gen_animation.linear2(100)
 
 	H.current.draw_status = "drawing"
 	local n_steps = math.abs(res.target.line - res.src.line) - 1
+
+	print("target_line, col, n_steps: " .. res.target.line .. ", " .. res.target.col .. ", " .. n_steps)
+	print("test:")
+	print(vim.inspect(res))
+	-- end
+
+	-- Grappler.grapple_ = function(direct)
 	local n_reel_steps = n_steps + 1 -- TODO: resolve this
 
 	-- don't draw chain on cursor
-	local og_line, og_col = line - 1, col + 1
+	local og_line, og_col = line + direct[1], col + direct[2]
 	local step, wait_time = 0, 0
 	local reel_step = 0
 
@@ -544,36 +356,30 @@ Grappler.operatorUR = function()
 	end
 
 	local draw_step = vim.schedule_wrap(function()
-		-- vim.notify(
-		-- 	"draw_step, n_steps="
-		-- 		.. n_steps
-		-- 		.. ",step="
-		-- 		.. step
-		-- 		.. ",chain_extmark_ids=("
-		-- 		.. serializeTable(extmark_ids)
-		-- 		.. ")"
-		-- )
-		local chain_extmark_id = draw_func_chain(og_line - step, og_col + step)
-		table.insert(extmark_ids["chain"], chain_extmark_id)
+		print("draw_step " .. step)
+		local chain_extmark_id = draw_func_chain(og_line + step * direct[1], og_col + step * direct[2])
+		if chain_extmark_id == false then
+			print("failed to put hook extmark")
+		else
+			table.insert(extmark_ids["chain"], chain_extmark_id)
+		end
 		if step >= n_steps - 1 then -- TODO code re-use here
-			step = step + 1
-			local hook_extmark_id = draw_func_hook(og_line - step, og_col + step)
-			table.insert(extmark_ids["hook"], hook_extmark_id)
-
-			-- vim.notify(
-			-- 	"Completed animation, calling finished_callback, n_steps="
-			-- 		.. n_steps
-			-- 		.. ",step="
-			-- 		.. step
-			-- 		.. ",chain_extmark_ids="
-			-- 		.. serializeTable(extmark_ids)
-			-- 		.. ", calling finished_callback"
-			-- )
-			H.current.draw_status = "finished"
+			print("fin, stopping timer. " .. step)
 			H.timer:stop()
+			local final_offset = n_steps
+			print("putting hook")
+			local hook_extmark_id =
+				draw_func_hook(og_line + final_offset * direct[1], og_col + final_offset * direct[2])
+			if hook_extmark_id == false then
+				print("failed to put hook extmark")
+			else
+				table.insert(extmark_ids["hook"], hook_extmark_id)
+			end
+
+			H.current.draw_status = "finished"
 			vim.defer_fn(function()
 				H.finished_callback()
-			end, 500)
+			end, 300)
 			return
 		end
 
@@ -585,31 +391,26 @@ Grappler.operatorUR = function()
 		-- call next step function directly.
 		H.timer:set_repeat(wait_time)
 
-		-- Restart `wait_time` only if it is actually used. Do this accounting
-		-- actually set repeat time.
-		-- wait_time = wait_time - H.timer:get_repeat()
-
 		-- Usage of `again()` is needed to overcome the fact that it is called
-		-- inside callback and to restart initial timer. Mainly this is needed
-		-- only in case of transition from 'non-repeating' timer to 'repeating'
-		-- one in case of complex animation functions. See
+		-- inside callback and to restart initial timer. Mainly in case of
+		-- transition from 'non-repeating' timer to 'repeating', see
 		-- https://docs.libuv.org/en/v1.x/timer.html#api
 		H.timer:again()
 	end)
 
-	local draw_reel_step_vb = function(step, n_steps)
-		vim.notify("step vb ran!")
-		vim.api.nvim_out_write("test")
-	end
-
 	local draw_reel_step = vim.schedule_wrap(function()
-		vim.notify("draw_reel_step, n_steps=" .. n_reel_steps .. ",step=" .. reel_step)
+		-- print("draw_reel_step, n_steps=" .. n_reel_steps .. ",step=" .. reel_step)
 		local all_extmarks = extmark_ids.all()
-		local succ = draw_func_reel(og_line - reel_step, og_col + reel_step, all_extmarks[reel_step + 1])
+		-- print("all_extmarks: " .. serializeTable(extmark_ids))
+		-- print(": " .. all_extmarks[reel_step + 1])
+		local succ =
+			draw_func_reel(og_line + direct[1] * reel_step, og_col + direct[2] * reel_step, all_extmarks[reel_step + 1])
 
 		if reel_step >= n_reel_steps - 1 then -- TODO code re-use here
-			vim.notify("Completed animation")
+			-- print("Completed animation")
 			H.current.draw_status = "finished"
+			H.undraw_chains(buf_id)
+			vim.wo.virtualedit = H.original_virtualedit
 			H.timer:stop()
 			return
 		end
@@ -625,20 +426,17 @@ Grappler.operatorUR = function()
 	end)
 
 	local reel_callback = function()
-		vim.notify("reel_callback, n_reel_steps=" .. n_reel_steps)
-		-- 		local original_virtualedit = vim.wo.virtualedit
-		-- 		vim.wo.virtualedit = "all"
-		--
-		-- 		-- Start non-repeating timer without callback execution. This shouldn't be
-		-- 		-- `timer:start(0, 0, draw_step)` because it will execute `draw_step` on the
-		-- 		-- next redraw (flickers on window scroll).
-		-- H.timer:start(10000000, 0, draw_reel_step_vb)
+		print("reel_callback, n_reel_steps=" .. n_reel_steps)
+		H.original_virtualedit = vim.wo.virtualedit
+		vim.wo.virtualedit = "all"
+
+		-- Start non-repeating timer without callback execution. This shouldn't be
+		-- `timer:start(0, 0, draw_step)` because it will execute `draw_step` on the
+		-- next redraw (flickers on window scroll).
 		H.timer:start(10000000, 0, draw_reel_step)
-		--
-		-- 		-- Draw step zero (at origin) immediately
+
+		-- Draw step zero (at origin) immediately
 		draw_reel_step()
-		--
-		-- 		vim.wo.virtualedit = original_virtualedit
 	end
 	--
 	-- 	-- Start non-repeating timer without callback execution. This shouldn't be
@@ -658,7 +456,7 @@ Grappler.operator2 = function()
 	-- function findTextAboveCursor()
 	local current_line = vim.api.nvim_win_get_cursor(0)[1]
 	local cursor_col = vim.api.nvim_win_get_cursor(0)[2]
-	local max_line = vim.api.nvim_buf_line_count(0)
+	-- local max_line = vim.fn.line("$", bufwinid(0))
 
 	for line = current_line - 1, 1, -1 do
 		local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1]
@@ -674,62 +472,6 @@ Grappler.operator2 = function()
 
 	-- If no suitable line is found, stay on the current line
 	vim.api.nvim_win_set_cursor(0, { current_line, 1 })
-end
-
---- Function for motion mappings
----
---- Move to a certain side of border. Respects |count| and dot-repeat (in
---- operator-pending mode). Doesn't move cursor for scope that is not shown
---- (drawing indent less that zero).
----
----@param side string One of "top" or "bottom".
----@param add_to_jumplist boolean|nil Whether to add movement to jump list. It is
----   `true` only for Normal mode mappings.
-Grappler.operator = function(side, add_to_jumplist)
-	-- if moving left, and already on the scope line, presumably we don't want to just stay in place
-	if side == "left" then
-		vim.cmd("normal! h") -- move left one
-	end
-
-	local scope = Grappler.get_scope()
-	if side == "right" then
-		local original_col = vim.fn.col(".")
-		local last_col = vim.fn.col("$")
-		local newscope = Grappler.get_scope()
-		while (newscope.body.top == scope.body.top) and (vim.fn.col(".") < last_col - 1) do
-			vim.cmd("normal! l") -- move right one, check scope again lol
-			newscope = Grappler.get_scope()
-		end
-		-- if we didnt find a new scope, return to where we were
-		if newscope.body.top == scope.body.top then
-			vim.api.nvim_win_set_cursor(0, { vim.fn.line("."), original_col - 1 })
-		end
-		return
-	end
-
-	-- Don't support scope that can't be shown
-	if H.scope_get_draw_indent(scope) < 0 then
-		return
-	end
-
-	-- Add movement to jump list. Needs remembering `count1` before that because
-	-- it seems to reset it to 1.
-	local count = vim.v.count1
-	if add_to_jumplist then
-		vim.cmd("normal! m`")
-	end
-
-	-- Make sequence of jumps
-	for _ = 1, count do
-		Grappler.move_cursor(side, true, scope)
-		-- Use `try_as_border = false` to enable chaining
-		scope = Grappler.get_scope(nil, nil, { try_as_border = false })
-
-		-- Don't support scope that can't be shown
-		if H.scope_get_draw_indent(scope) < 0 then
-			return
-		end
-	end
 end
 
 --- Function for textobject mappings
@@ -790,80 +532,6 @@ H.timer = vim.loop.new_timer()
 -- - `draw_status` - status of current drawing.
 H.current = { event_id = 0, scope = {}, draw_status = "none" }
 
--- Functions to compute indent in ambiguous cases
-H.indent_funs = {
-	["min"] = function(top_indent, bottom_indent)
-		return math.min(top_indent, bottom_indent)
-	end,
-	["max"] = function(top_indent, bottom_indent)
-		return math.max(top_indent, bottom_indent)
-	end,
-	["top"] = function(top_indent, bottom_indent)
-		return top_indent
-	end,
-	["bottom"] = function(top_indent, bottom_indent)
-		return bottom_indent
-	end,
-}
-
--- Functions to compute indent of blank line to satisfy `config.options.border`
-H.blank_indent_funs = {
-	["none"] = H.indent_funs.min,
-	["top"] = H.indent_funs.bottom,
-	["bottom"] = H.indent_funs.top,
-	["both"] = H.indent_funs.max,
-}
-
--- Functions to compute border from body
-H.border_from_body = {
-	["none"] = function(body, opts)
-		return {}
-	end,
-	["top"] = function(body, opts)
-		return { top = body.top - 1, indent = H.get_line_indent(body.top - 1, opts) }
-	end,
-	["bottom"] = function(body, opts)
-		return { bottom = body.bottom + 1, indent = H.get_line_indent(body.bottom + 1, opts) }
-	end,
-	["both"] = function(body, opts)
-		return {
-			top = body.top - 1,
-			bottom = body.bottom + 1,
-			indent = math.max(H.get_line_indent(body.top - 1, opts), H.get_line_indent(body.bottom + 1, opts)),
-		}
-	end,
-}
-
--- Functions to correct line in case it is a border
-H.border_correctors = {
-	["none"] = function(line, opts)
-		return line
-	end,
-	["top"] = function(line, opts)
-		local cur_indent, next_indent = H.get_line_indent(line, opts), H.get_line_indent(line + 1, opts)
-		return (cur_indent < next_indent) and (line + 1) or line
-	end,
-	["bottom"] = function(line, opts)
-		local prev_indent, cur_indent = H.get_line_indent(line - 1, opts), H.get_line_indent(line, opts)
-		return (cur_indent < prev_indent) and (line - 1) or line
-	end,
-	["both"] = function(line, opts)
-		local prev_indent, cur_indent, next_indent =
-			H.get_line_indent(line - 1, opts), H.get_line_indent(line, opts), H.get_line_indent(line + 1, opts)
-
-		if prev_indent <= cur_indent and next_indent <= cur_indent then
-			return line
-		end
-
-		-- If prev and next indents are equal and bigger than current, prefer next
-		if prev_indent <= next_indent then
-			return line + 1
-		end
-
-		return line - 1
-	end,
-}
-
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
 H.setup_config = function(config)
@@ -886,18 +554,28 @@ H.setup_config = function(config)
 		["draw.priority"] = { config.draw.priority, "number" },
 		["draw.tick_ms"] = { config.draw.tick_ms, "number" },
 
-		["mappings.object_scope"] = { config.mappings.object_scope, "string" },
-		["mappings.object_scope_with_border"] = { config.mappings.object_scope_with_border, "string" },
+		["mappings.right"] = { config.mappings.up_right, "string" },
+		["mappings.up_right"] = { config.mappings.up_right, "string" },
+		["mappings.up"] = { config.mappings.up, "string" },
+		["mappings.up_left"] = { config.mappings.up_left, "string" },
+		["mappings.left"] = { config.mappings.up_left, "string" },
+		["mappings.down_left"] = { config.mappings.down_left, "string" },
+		["mappings.down"] = { config.mappings.down, "string" },
+		["mappings.down_right"] = { config.mappings.down_right, "string" },
+		["mappings.toggle_grapple_mode"] = { config.mappings.toggle_grapple_mode, "string" },
+
+		-- ["mappings.object_scope"] = { config.mappings.object_scope, "string" },
+		-- ["mappings.object_scope_with_border"] = { config.mappings.object_scope_with_border, "string" },
 		-- ["mappings.goto_temp"] = { config.mappings.goto_temp, "string" },
-		["mappings.goto_top"] = { config.mappings.goto_top, "string" },
-		["mappings.goto_bottom"] = { config.mappings.goto_bottom, "string" },
+		-- ["mappings.goto_top"] = { config.mappings.goto_top, "string" },
+		-- ["mappings.goto_bottom"] = { config.mappings.goto_bottom, "string" },
 
-		["mappings.goto_left"] = { config.mappings.goto_left, "string" },
-		["mappings.goto_right"] = { config.mappings.goto_right, "string" },
+		-- ["mappings.goto_left"] = { config.mappings.goto_left, "string" },
+		-- ["mappings.goto_right"] = { config.mappings.goto_right, "string" },
 
-		["options.border"] = { config.options.border, "string" },
-		["options.indent_at_cursor"] = { config.options.indent_at_cursor, "boolean" },
-		["options.try_as_border"] = { config.options.try_as_border, "boolean" },
+		-- ["options.border"] = { config.options.border, "string" },
+		-- ["options.indent_at_cursor"] = { config.options.indent_at_cursor, "boolean" },
+		-- ["options.try_as_border"] = { config.options.try_as_border, "boolean" },
 	})
 	return config
 end
@@ -907,23 +585,28 @@ H.apply_config = function(config)
 	local maps = config.mappings
 
   --stylua: ignore start
-  H.map('n', maps.goto_top, [[<Cmd>lua Grappler.operator('temp', true)<CR>]], { desc = 'Go to indent scope top' })
-  -- H.map('n', maps.goto_temp, [[<Cmd>lua Grappler.operator('temp', true)<CR>]], { desc = 'Go to indent scope top' })
-  H.map('n', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom', true)<CR>]], { desc = 'Go to indent scope bottom' })
+	--
+	--
+  H.map('n', maps.toggle_grapple_mode, [[<Cmd>lua Grappler.toggle_grapple_mode()<CR>]], { desc = 'Go to indent scope top' })
+  H.map('n', maps.up_right, [[<Cmd>lua Grappler.grapple({1,1}, true)<CR>]], { desc = 'Go to indent scope top' })
 
-  H.map('n', maps.goto_left, [[<Cmd>lua Grappler.operator('left', false)<CR>]], { desc = 'Go to indent scope left' })
-  H.map('n', maps.goto_right, [[<Cmd>lua Grappler.operator('right', false)<CR>]], { desc = 'Go to indent scope right' })
-  -- H.map('n', maps.goto_, [[<Cmd>lua Grappler.operator('left', true)<CR>]], { desc = 'Go to indent scope bottom' })
+	-- H.map('n', maps.goto_top, [[<Cmd>lua Grappler.operator('temp', true)<CR>]], { desc = 'Go to indent scope top' })
+	-- H.map('n', maps.goto_temp, [[<Cmd>lua Grappler.operator('temp', true)<CR>]], { desc = 'Go to indent scope top' })
+	-- H.map('n', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom', true)<CR>]], { desc = 'Go to indent scope bottom' })
 
-  H.map('x', maps.goto_top, [[<Cmd>lua Grappler.operator('top')<CR>]], { desc = 'Go to indent scope top' })
-  H.map('x', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
-  H.map('x', maps.object_scope, '<Cmd>lua Grappler.textobject(false)<CR>', { desc = 'Object scope' })
-  H.map('x', maps.object_scope_with_border, '<Cmd>lua Grappler.textobject(true)<CR>', { desc = 'Object scope with border' })
+	-- H.map('n', maps.goto_left, [[<Cmd>lua Grappler.operator('left', false)<CR>]], { desc = 'Go to indent scope left' })
+	-- H.map('n', maps.goto_right, [[<Cmd>lua Grappler.operator('right', false)<CR>]], { desc = 'Go to indent scope right' })
+	-- H.map('n', maps.goto_, [[<Cmd>lua Grappler.operator('left', true)<CR>]], { desc = 'Go to indent scope bottom' })
 
-  H.map('o', maps.goto_top, [[<Cmd>lua Grappler.operator('top')<CR>]], { desc = 'Go to indent scope top' })
-  H.map('o', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
-  H.map('o', maps.object_scope, '<Cmd>lua Grappler.textobject(false)<CR>', { desc = 'Object scope' })
-  H.map('o', maps.object_scope_with_border, '<Cmd>lua Grappler.textobject(true)<CR>', { desc = 'Object scope with border' })
+	-- H.map('x', maps.goto_top, [[<Cmd>lua Grappler.operator('top')<CR>]], { desc = 'Go to indent scope top' })
+	-- H.map('x', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
+	-- H.map('x', maps.object_scope, '<Cmd>lua Grappler.textobject(false)<CR>', { desc = 'Object scope' })
+	-- H.map('x', maps.object_scope_with_border, '<Cmd>lua Grappler.textobject(true)<CR>', { desc = 'Object scope with border' })
+
+	-- H.map('o', maps.goto_top, [[<Cmd>lua Grappler.operator('top')<CR>]], { desc = 'Go to indent scope top' })
+	-- H.map('o', maps.goto_bottom, [[<Cmd>lua Grappler.operator('bottom')<CR>]], { desc = 'Go to indent scope bottom' })
+	-- H.map('o', maps.object_scope, '<Cmd>lua Grappler.textobject(false)<CR>', { desc = 'Object scope' })
+	-- H.map('o', maps.object_scope_with_border, '<Cmd>lua Grappler.textobject(true)<CR>', { desc = 'Object scope with border' })
 	--stylua: ignore start
 end
 
@@ -954,99 +637,84 @@ H.get_line_indent = function(line, opts)
 	return res
 end
 
-H.UR_ray = function(line, col)
+H.ray_cast = function(line, col, direct)
 	local target_line, target_col = line, col
 	local original_line, original_col = line, col
-	-- vim.notify("setup from line: " .. line)
-	line = line - 1
-	col = col + 1
+	-- print("setup from line: " .. line)
+	--
+	-- line = line - 1 -- for UR
+	line = line + direct[1]
+	col = col + direct[2]
 
 	local max_col = vim.fn.winwidth(0) - 7
+	-- local max_line = nvim_buf_line_count(vim.fn.bufnr())
+
+	local max_line = vim.fn.line("$")
+	print("max_line: " .. max_line)
+	-- line = line - 1 -- for UR
 	-- local found_target = false;
 	local not_done = true
 	while not_done do
-		-- vim.notify("loop: move up to line: " .. line)
 		if line < 1 then
 			target_line = 1 -- 1 indexed ughhh
 			target_col = col -- TODO break
 			not_done = false
-		end
-		if col > max_col then
+		elseif line >= max_line - 1 then
+			target_line = max_line - 1
+			target_col = col -- TODO break
+			not_done = false
+		elseif col < 1 then
+			target_col = col
+			target_line = line -- TODO break
+			not_done = false
+		elseif col > max_col - 1 then -- idk about the edges yet
 			target_col = col
 			target_line = line -- TODO break
 			not_done = false
 		end
-		--                                              buf, start,  end, strict_indexing (whether out of bounds should be an error)
 
 		if not_done == true then
 			local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1]
+			-- print("checking line " .. line .. ": " .. line_content)
 			if #line_content >= col then
+				-- print("target?")
 				target_col = col
 				target_line = line
 				not_done = false
 			end
 		end
-		line = line - 1
-		col = col + 1
+		line = line + direct[1]
+		col = col + direct[2]
 	end
-	-- vim.notify(
+	-- print(
 	-- 	"found target (line:" .. target_line .. ",col:" .. target_col .. ") @ dist." .. (target_line - original_line)
 	-- )
 	return {
 		found_target = true,
 		target = { line = target_line, col = target_col },
 		src = { line = original_line, col = original_col },
-		direct = "TR",
 	}
 end
 
-H.cast_ray = function(line, indent, direction, opts)
-	local final_line, increment = 1, -1
-	if direction == "down" then
-		final_line, increment = vim.fn.line("$"), 1
-	end
-
-	local min_indent = math.huge
-	for l = line, final_line, increment do
-		local new_indent = H.get_line_indent(l + increment, opts)
-		if new_indent < indent then
-			return l, min_indent
-		end
-		if new_indent < min_indent then
-			min_indent = new_indent
-		end
-	end
-
-	return final_line, min_indent
-end
-
-H.scope_get_draw_indent = function(scope)
-	return scope.border.indent or (scope.body.indent - 1)
-end
-
-H.scope_is_equal = function(scope_1, scope_2)
-	if type(scope_1) ~= "table" or type(scope_2) ~= "table" then
-		return false
-	end
-
-	return scope_1.buf_id == scope_2.buf_id
-		and H.scope_get_draw_indent(scope_1) == H.scope_get_draw_indent(scope_2)
-		and scope_1.body.top == scope_2.body.top
-		and scope_1.body.bottom == scope_2.body.bottom
-end
-
-H.scope_has_intersect = function(scope_1, scope_2)
-	if type(scope_1) ~= "table" or type(scope_2) ~= "table" then
-		return false
-	end
-	if (scope_1.buf_id ~= scope_2.buf_id) or (H.scope_get_draw_indent(scope_1) ~= H.scope_get_draw_indent(scope_2)) then
-		return false
-	end
-
-	local body_1, body_2 = scope_1.body, scope_2.body
-	return (body_2.top <= body_1.top and body_1.top <= body_2.bottom)
-		or (body_1.top <= body_2.top and body_2.top <= body_1.bottom)
-end
+-- H.cast_ray = function(line, indent, direction, opts)
+-- 	local final_line, increment = 1, -1
+-- 	if direction == "down" then
+-- 		final_line, increment = vim.fn.line("$"), 1
+-- 	end
+--
+-- 	local min_indent = math.huge
+-- 	for l = line, final_line, increment do
+-- 		local new_indent = H.get_line_indent(l + increment, opts)
+-- 		if new_indent < indent then
+-- 			return l, min_indent
+-- 		end
+-- 		if new_indent < min_indent then
+-- 			min_indent = new_indent
+-- 		end
+-- 	end
+--
+-- 	return final_line, min_indent
+-- end
 
 H.undraw_chains = function(buf_id)
 	-- Don't operate outside of current event if able to verify
@@ -1094,11 +762,28 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
 
 	local virt_text
 	if hook == true then
-		-- vim.notify("hook")
-		virt_text = { { "X", hl_group } }
+		-- print("hook")
+		-- virt_text = { { "X", hl_group } }
+		virt_text = { { "", hl_group } }
 	else
-		-- vim.notify("chain")
-		virt_text = { { "╱", hl_group } }
+		-- print("chain")
+		if direct[2] == 1 then
+			if direct[1] == -1 then
+				virt_text = { { "╱", hl_group } }
+			elseif direct[1] == 0 then
+				virt_text = { { "-", hl_group } }
+			else
+				virt_text = { { "╲", hl_group } }
+			end
+		elseif direct[2] == 0 then
+			virt_text = { { "|", hl_group } }
+		else -- col negative
+			if direct[1] == 1 then
+				virt_text = { { "╱", hl_group } }
+			elseif direct[1] == -1 then
+				virt_text = { { "╲", hl_group } }
+			end
+		end
 	end
 	return function(line, col, extmark_id)
 		local extmark_opts = {
@@ -1121,11 +806,12 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
 		if reel then
 			local succ = pcall(vim.api.nvim_buf_del_extmark, buf_id, H.ns_id, extmark_id)
 			if succ then
-				-- vim.notify("deleted extmark")
+				-- print("deleted extmark")
+				print("setting cursor to col: " .. col)
 				vim.api.nvim_win_set_cursor(0, { line, col })
 				return true
 			end
-			vim.notify("failed to del extmark w/ id (lemmeguess_nil_lol:" .. extmark_id .. ")")
+			print("failed to del extmark w/ id (lemmeguess_nil_lol:" .. extmark_id .. ")")
 			return false
 		else
 			-- return pcall(vim.api.nvim_buf_set_extmark, buf_id, H.ns_id, line - 1, 0, extmark_opts)
@@ -1133,7 +819,7 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
 			if succ then
 				return id
 			else
-				vim.notify("failed to set extmark")
+				print("failed to set extmark")
 				return false
 			end
 		end
