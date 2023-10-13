@@ -304,13 +304,13 @@ Grappler.clear_symbols = function() -- grapple()
 end
 
 Grappler.grapple = function(direct) -- grapple()
-	print("grapple")
 	local config = H.get_config()
 	local tick_ms = config.draw.tick_ms
 	local buf_id = vim.api.nvim_get_current_buf()
 	-- local delays = {}
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local line, col = cursor[1], cursor[2]
+	print("grapple from l,c(", line, ",", col, ")")
 	local res = H.ray_cast(line, col, direct)
 	print("res; " .. serializeTable(res))
 
@@ -335,15 +335,16 @@ Grappler.grapple = function(direct) -- grapple()
 	-- local animation_func = config.draw.animation --Grappler.gen_animation.linear2(100)
 
 	H.current.draw_status = "drawing"
-	local n_steps = math.abs(res.target.line - res.src.line) - 1
+	local delta_col, delta_line = (res.target.line - res.src.line), (res.target.col - res.src.col)
+	local n_chain_steps = math.max(math.abs(delta_col), math.abs(delta_line)) - 1
+	print("delta_line: " .. delta_line)
+	print("delta_col: " .. delta_col)
+	print("n_steps: " .. n_chain_steps)
 
-	print("target_line, col, n_steps: " .. res.target.line .. ", " .. res.target.col .. ", " .. n_steps)
-	print("test:")
-	print(vim.inspect(res))
-	-- end
+	print("target_line, col, n_steps: " .. res.target.line .. ", " .. res.target.col .. ", " .. n_chain_steps)
 
 	-- Grappler.grapple_ = function(direct)
-	local n_reel_steps = n_steps + 1 -- TODO: resolve this
+	local n_reel_steps = n_chain_steps + 1 -- TODO: resolve this
 
 	-- don't draw chain on cursor
 	local og_line, og_col = line + direct[1], col + direct[2]
@@ -357,16 +358,19 @@ Grappler.grapple = function(direct) -- grapple()
 
 	local draw_step = vim.schedule_wrap(function()
 		print("draw_step " .. step)
-		local chain_extmark_id = draw_func_chain(og_line + step * direct[1], og_col + step * direct[2])
+		local cur_chain_line = og_line + step * direct[1]
+		local cur_chain_col = og_col + step * direct[2]
+		local chain_extmark_id = draw_func_chain(cur_chain_line, cur_chain_col)
 		if chain_extmark_id == false then
-			print("failed to put hook extmark")
+			print("failed to put chain extmark")
 		else
+			print("put chain at cur_chain_line, cur_chain_col =" .. cur_chain_line .. ", " .. cur_chain_col)
 			table.insert(extmark_ids["chain"], chain_extmark_id)
 		end
-		if step >= n_steps - 1 then -- TODO code re-use here
+		if step >= n_chain_steps - 1 then -- TODO code re-use here
 			print("fin, stopping timer. " .. step)
 			H.timer:stop()
-			local final_offset = n_steps
+			local final_offset = n_chain_steps
 			print("putting hook")
 			local hook_extmark_id =
 				draw_func_hook(og_line + final_offset * direct[1], og_col + final_offset * direct[2])
@@ -450,28 +454,6 @@ Grappler.grapple = function(direct) -- grapple()
 
 	-- Draw step zero (at origin) immediately
 	draw_step()
-end
-
-Grappler.operator2 = function()
-	-- function findTextAboveCursor()
-	local current_line = vim.api.nvim_win_get_cursor(0)[1]
-	local cursor_col = vim.api.nvim_win_get_cursor(0)[2]
-	-- local max_line = vim.fn.line("$", bufwinid(0))
-
-	for line = current_line - 1, 1, -1 do
-		local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1]
-		if not line_content then
-			break
-		end
-
-		if #line_content >= cursor_col then
-			vim.api.nvim_win_set_cursor(0, { line, cursor_col })
-			return
-		end
-	end
-
-	-- If no suitable line is found, stay on the current line
-	vim.api.nvim_win_set_cursor(0, { current_line, 1 })
 end
 
 --- Function for textobject mappings
@@ -637,6 +619,23 @@ H.get_line_indent = function(line, opts)
 	return res
 end
 
+function findNonWhitespaceIndices(line)
+	local pattern = "%S"
+	local firstIndex = string.find(line, pattern)
+	local lastIndex = string.find(string.reverse(line), pattern)
+
+	if firstIndex then
+		lastIndex = #line - lastIndex + 1
+	end
+
+	if not firstIndex or not lastIndex then
+		firstIndex = nil
+		lastIndex = nil
+	end
+
+	return firstIndex, lastIndex
+end
+
 H.ray_cast = function(line, col, direct)
 	local target_line, target_col = line, col
 	local original_line, original_col = line, col
@@ -650,34 +649,51 @@ H.ray_cast = function(line, col, direct)
 	-- local max_line = nvim_buf_line_count(vim.fn.bufnr())
 
 	local max_line = vim.fn.line("$")
-	print("max_line: " .. max_line)
+
+	if line > max_line then
+		print("line: ", line, "> max_line: ", max_line, ". returning early, no target.")
+		return {
+			found_target = false,
+			src = { line = original_line, col = original_col },
+		}
+	else
+		-- print("line " .. line .. "!= max_line " .. max_line)
+	end
+	-- print("max_line: ", max_line)
 	-- line = line - 1 -- for UR
 	-- local found_target = false;
 	local not_done = true
 	while not_done do
 		if line < 1 then
+			print("found target due to line: ", line, "< 1")
 			target_line = 1 -- 1 indexed ughhh
 			target_col = col -- TODO break
 			not_done = false
-		elseif line >= max_line - 1 then
-			target_line = max_line - 1
+		elseif line >= max_line then
+			print("found target due to line: ", line, ">= max_line == ", max_line)
+			target_line = max_line
 			target_col = col -- TODO break
 			not_done = false
-		elseif col < 1 then
-			target_col = col
+		elseif col < 0 then -- 0 indexed WTF why are they different?
+			print("found target due to col: ", col, "< 0")
+			target_col = 0
 			target_line = line -- TODO break
 			not_done = false
-		elseif col > max_col - 1 then -- idk about the edges yet
-			target_col = col
+		elseif col >= max_col then -- idk about the edges yet
+			print("found target due to col: ", col, ">= max_col == ", max_col)
+			target_col = max_col
 			target_line = line -- TODO break
 			not_done = false
 		end
 
 		if not_done == true then
-			local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1]
-			-- print("checking line " .. line .. ": " .. line_content)
-			if #line_content >= col then
-				-- print("target?")
+			local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1] -- [1] to grab the 1 and only line we requested
+			-- if line_content:sub(col,col) ~= " " then
+			print("line_content[line=", line, ",col=", col, "]=", line_content:sub(col + 1, col + 1))
+			if #line_content <= col then
+				print(".")
+			elseif not line_content:sub(col + 1, col + 1):match("%s") then
+				print("matched @ l,c:", line, ",", col)
 				target_col = col
 				target_line = line
 				not_done = false
@@ -807,8 +823,13 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
 			local succ = pcall(vim.api.nvim_buf_del_extmark, buf_id, H.ns_id, extmark_id)
 			if succ then
 				-- print("deleted extmark")
-				print("setting cursor to col: " .. col)
+				print("setting cursor to line: " .. line .. ", col: " .. col)
+
+				-- TODO, for some reason nvim_win_set_cursor() has different x offset on lines with and without content
+
 				vim.api.nvim_win_set_cursor(0, { line, col })
+				-- vim.api.nvim_win_set_cursor(0, { line, col })
+				-- vim.api.nvim_feedkeys("k", "n", false)
 				return true
 			end
 			print("failed to del extmark w/ id (lemmeguess_nil_lol:" .. extmark_id .. ")")
