@@ -93,7 +93,7 @@ Grappler.setup = function(config)
 
   -- Create highlighting
   vim.api.nvim_exec(
-    [[hi default link GrapplerSymbol Delimiter
+    [[hi default link GrapplerSymbolChain Delimiter
 			hi default link GrapplerSymbolOff GrapplerSymbol]],
     false
   )
@@ -134,13 +134,112 @@ Grappler.config = {
   -- symbols = "/D",
 }
 
--- Define a function to highlight non-space characters in each line
--- function H.clear_nonspace_highlights(buf_id, ){
---   let succ pcall(vim.api.nvim_buf_clear_namespace, buf_id or 0, H.ns_id, 0, -1)
---   end
--- }
+-- Helper function to check if a character at a specific index is blank
+-- Helper function to check if a character at a specific index is a non-space character
+function H.is_idx_non_space(line_content, col)
+  return not H.is_idx_blank(line_content, col)
+end
+
+-- function to highlight non-space characters around a target
+function H.highlightNonSpaceCharactersSearchTarget(target)
+  local extmark_opts = {
+    hl_mode = "combine",
+    priority = 3,
+    right_gravity = false,
+    virt_text_pos = "overlay",
+  }
+
+  -- Get the current buffer
+  local current_buf = vim.api.nvim_get_current_buf()
+
+  -- Define the namespace for our highlights
+  local ns_id = H.ns_id
+
+  -- Create a table to act as a queue for BFS
+  local queue = { target }
+  local visited = {}
+
+  -- Get the total number of lines in the buffer
+  local num_lines = vim.api.nvim_buf_line_count(current_buf)
+
+  while #queue > 0 do
+    local current = table.remove(queue, 1)
+    print("---------")
+    print("current=" .. serialize_table(current))
+
+    -- Check if the current position has been visited
+    if visited[current.line * num_lines + current.col] then
+      goto continue
+    end
+
+    visited[current.line * num_lines + current.col] = true
+
+    local line_content = vim.api.nvim_buf_get_lines(current_buf, current.line - 1, current.line, false)[1]
+
+    print("checking everywhere")
+    print("line_content: " .. line_content)
+    -- Check left
+    for col = current.col - 1, 0, -1 do
+      print("checking left, l=" .. current.line .. ",col=" .. col)
+      if H.is_idx_blank(line_content, col) then
+        print("found blank left at " .. H.char_at(line_content, col))
+        break
+      end
+
+      print("highlighting on current.line=" .. current.line .. "," .. H.char_at(line_content, col))
+      extmark_opts.virt_text = { { H.char_at(line_content, col), "NonSpaceHighlight" } }
+      extmark_opts.virt_text_win_col = col
+      extmark_opts.hl_group = "NonSpaceHighlight"
+      vim.api.nvim_buf_set_extmark(current_buf, ns_id, current.line - 1, 0, extmark_opts)
+    end
+
+    -- Check right
+    for col = current.col + 1, #line_content do
+      print("checking right, l=" .. current.line .. ",col=" .. col)
+      if H.is_idx_blank(line_content, col) then
+        print("found blank right at " .. col .. "=" .. H.char_at(line_content, col))
+        break
+      end
+
+      extmark_opts.virt_text = { { H.char_at(line_content, col), "NonSpaceHighlight" } }
+      extmark_opts.virt_text_win_col = col
+      extmark_opts.hl_group = "NonSpaceHighlight"
+      vim.api.nvim_buf_set_extmark(current_buf, ns_id, current.line - 1, 0, extmark_opts)
+    end
+
+    -- Check up
+    if current.line > 1 then
+      print("checking up, l=" .. current.line .. ",col=" .. current.col)
+      local prev_line_content = vim.api.nvim_buf_get_lines(current_buf, current.line - 2, current.line - 1, false)[1]
+      print("prev_line_content: " .. prev_line_content)
+      if H.is_idx_blank(prev_line_content, current.col) then
+        print("found blank up at " .. current.col .. "=" .. H.char_at(line_content, current.col))
+      else
+        print("up wasn't blank at idx .. " .. current.col .. ", char=" .. H.char_at(prev_line_content, current.col))
+        table.insert(queue, { line = current.line - 1, col = current.col })
+      end
+    end
+
+    -- Check down
+    if current.line < num_lines - 1 then
+      print("checking down, l=" .. current.line .. ",col=" .. current.col)
+      local next_line_content = vim.api.nvim_buf_get_lines(current_buf, current.line, current.line + 1, false)[1]
+      print("next_line_content: " .. next_line_content)
+      if H.is_idx_blank(next_line_content, current.col) then
+        print("found blank down at " .. current.col .. "=" .. H.char_at(line_content, current.col))
+      else
+        print("down wasn't blank at idx .. " .. current.col .. ", char=" .. H.char_at(next_line_content, current.col))
+        table.insert(queue, { line = current.line + 1, col = current.col })
+      end
+    end
+
+    ::continue::
+  end
+end
+
+-- function to highlight non-space characters in each line
 function H.highlightNonSpaceCharacters()
-  vim.cmd([[highlight NonSpaceHighlight guibg=#660040 guifg=#939993]])
+  -- vim.cmd([[highlight GrapplerSymbolChain guibg=#660040 guifg=#939993]])
 
   local extmark_opts = {
     hl_mode = "combine", -- Replace existing text color
@@ -172,12 +271,8 @@ function H.highlightNonSpaceCharacters()
       print("couldn't get " .. line_num)
     end
 
-    --stylua: ignore
-    -- extmark_opts.end_col = 15 -- out of range??
-    -- extmark_opts.virt_text_win_col = 7
-    -- local res = vim.api.nvim_buf_set_extmark(current_buf, ns_id, 175, 0, extmark_opts) -- 0 is col but seems to have no effect, see virt_text_win_col idk why col does nothing
     for col = 0, #line_content do
-      local found_char = not H.is_idx_blank(line_content,col)
+      local found_char = not H.is_idx_blank(line_content, col)
       if found_char then
         -- Highlight non-space characters with a custom highlight group
         -- extmark_opts.
@@ -234,6 +329,10 @@ H.get_deltas = function(src, target, direct)
 end
 
 Grappler.grapple = function(direct) -- grapple()
+  vim.cmd([[highlight NonSpaceHighlight guibg=#440040 guifg=#939993 gui=NONE]])
+  vim.cmd([[highlight GrapplerSymbolChain guibg=#000000 guifg=#FFFFFF gui=NONE]])
+  vim.cmd([[highlight GrapplerSymbolHook guibg=#440040 guifg=#AA7700]])
+
   if H.current.grapple_status == true then
     -- if H.current.draw_status == "drawing" then
     return
@@ -289,6 +388,7 @@ Grappler.grapple = function(direct) -- grapple()
     H.current.grapple_status = false
     return
   end
+  H.highlightNonSpaceCharactersSearchTarget(res.target)
   -- end
 
   -- Grappler.grapple2 = function(direct) -- grapple()
@@ -516,6 +616,10 @@ end
 
 H.is_idx_blank = function(line_content, col)
   local char = H.char_at(line_content, col)
+  print("investigating_char: " .. char)
+  if char == "" then
+    return true
+  end
   local char_left = H.char_at(line_content, col - 1)
   local char_right = H.char_at(line_content, col + 1)
   local match = char:match("%s")
@@ -732,30 +836,32 @@ end
 
 H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
   local current_event_id = opts.event_id
-  local hl_group = "GrapplerSymbol"
+  local hl_group_chain = "GrapplerSymbolChain"
+  local hl_group_hook = "GrapplerSymbolHook"
 
   local virt_text
   if hook == true then
     -- virt_text = { { "X", hl_group } }
-    virt_text = { { "", hl_group } }
+    -- virt_text = { { "", hl_group_hook } }
+    virt_text = { { "█", hl_group_hook } }
   else
     if direct[2] == 1 then
       if direct[1] == -1 then
-        virt_text = { { "╱", hl_group } }
+        virt_text = { { "╱", hl_group_chain } }
       elseif direct[1] == 0 then
-        virt_text = { { "-", hl_group } }
+        virt_text = { { "-", hl_group_chain } }
       else
-        virt_text = { { "╲", hl_group } }
+        virt_text = { { "╲", hl_group_chain } }
       end
     elseif direct[2] == 0 then
-      virt_text = { { "|", hl_group } }
+      virt_text = { { "|", hl_group_chain } }
     else -- col negative
       if direct[1] == 1 then
-        virt_text = { { "╱", hl_group } }
+        virt_text = { { "╱", hl_group_chain } }
       elseif direct[1] == -1 then
-        virt_text = { { "╲", hl_group } }
+        virt_text = { { "╲", hl_group_chain } }
       else
-        virt_text = { { "-", hl_group } }
+        virt_text = { { "-", hl_group_chain } }
       end
     end
   end
