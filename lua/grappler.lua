@@ -200,14 +200,13 @@ Grappler.clear_symbols = function() -- grapple()
 end
 
 H.get_deltas = function(src, target, direct)
-  print(
-    "get_deltas. src: "
-      .. serialize_table(src)
-      .. " target: "
-      .. serialize_table(target)
-      .. "direct: "
-      .. serialize_table(direct)
-  )
+  --   "get_deltas. src: "
+  --     .. serialize_table(src)
+  --     .. " target: "
+  --     .. serialize_table(target)
+  --     .. "direct: "
+  --     .. serialize_table(direct)
+  -- )
   local target_line, target_col = target.line, target.col
   local original_line, original_col = src.line, src.col
   local delta_line, delta_col = (target_line - original_line), (target_col - original_col)
@@ -231,14 +230,12 @@ H.get_deltas = function(src, target, direct)
     delta_col = delta_col,
     n_chain_steps = n_chain_steps,
   }
-  print("res from in get_deltas: " .. serialize_table(res))
   return res
 end
 
 Grappler.grapple = function(direct) -- grapple()
   if H.current.grapple_status == true then
     -- if H.current.draw_status == "drawing" then
-    print("already drawing, u tryna crash me?")
     return
   end
   -- H.highlightNonSpaceCharacters()
@@ -256,28 +253,37 @@ Grappler.grapple = function(direct) -- grapple()
   -- local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1] -- [1] to grab the 1 and only line we requested
   local max_virt_col = vim.fn.virtcol("$")
 
+  if direct[2] == -1 then -- left or left diagonal
+    if col == 0 then
+      H.current.grapple_status = false
+      return
+    end
+  end
   if direct[1] == 0 and direct[2] == 1 then -- right
     local delta = max_virt_col - col
-    vim.notify("delta: " .. max_virt_col - col)
     if delta == 3 then
-      --     / last word in line, cursor on X
+      --     / last word in line, cursor on X, grappling right
       -- aaXa
       --
       -- just move right one.
+      --
+      -- aaaX
       vim.api.nvim_feedkeys("l", "n", false)
       H.current.grapple_status = false
       return
     end
     if delta == 2 then
-      vim.notify("no.")
+      --      / last word in line, cursor on X, grappling right
+      -- aaaX
+      --
+      -- no point grappling right all the way to the edge
+      -- of the screen, so just return early, do nothing.
       H.current.grapple_status = false
       return
     end
   end
   -- local line, col = cursor[1], cursor[2]
-  print("grapple from l,c(", line, ",", col, ")")
   local res = H.ray_cast_for_grapple_target(line, col, direct)
-  print("res; " .. serialize_table(res))
   if not res.found_target then
     print("no target found")
     H.current.grapple_status = false
@@ -306,10 +312,7 @@ Grappler.grapple = function(direct) -- grapple()
   -- local tmp_delta2 = vim.fn.virtcol({ res.src.line, res.src.col })
 
   local res_ = H.get_deltas(res.src, res.target, direct)
-  print("hi69")
   local n_chain_steps = res_.n_chain_steps
-  print("res received from get_deltas: " .. serialize_table(res_))
-  -- print("target_line, col, n_steps: " .. res.target.line .. ", " .. res.target.col .. ", " .. n_chain_steps)
 
   -- Grappler.grapple_ = function(direct)
   local n_reel_steps = n_chain_steps + 1 -- TODO: resolve this
@@ -325,21 +328,17 @@ Grappler.grapple = function(direct) -- grapple()
   end
 
   local draw_step = vim.schedule_wrap(function()
-    print("draw_step " .. step)
     local cur_chain_line = og_line + step * direct[1]
     local cur_chain_col = og_col + step * direct[2]
     local chain_extmark_id = draw_func_chain(cur_chain_line, cur_chain_col)
     if chain_extmark_id == false then
       print("failed to put chain extmark")
     else
-      print("put chain at cur_chain_line, cur_chain_col =" .. cur_chain_line .. ", " .. cur_chain_col)
       table.insert(extmark_ids["chain"], chain_extmark_id)
     end
     if step >= n_chain_steps - 1 then -- TODO code re-use here
-      print("fin, stopping timer. " .. step)
       H.timer:stop()
       local final_offset = n_chain_steps
-      print("putting hook")
       local hook_extmark_id = draw_func_hook(og_line + final_offset * direct[1], og_col + final_offset * direct[2])
       if hook_extmark_id == false then
         print("failed to put hook extmark")
@@ -370,10 +369,7 @@ Grappler.grapple = function(direct) -- grapple()
   end)
 
   local draw_reel_step = vim.schedule_wrap(function()
-    -- print("draw_reel_step, n_steps=" .. n_reel_steps .. ",step=" .. reel_step)
     local all_extmarks = extmark_ids.all()
-    -- print("all_extmarks: " .. serialize_table(extmark_ids))
-    -- print(": " .. all_extmarks[reel_step + 1])
     local succ =
       draw_func_reel(og_line + direct[1] * reel_step, og_col + direct[2] * reel_step, all_extmarks[reel_step + 1])
 
@@ -381,8 +377,6 @@ Grappler.grapple = function(direct) -- grapple()
       H.timer:stop()
       H.undraw_chains(buf_id)
       -- vim.wo.virtualedit = H.original_virtualedit
-      -- print("OG!")
-      print(H.original_virtualedit)
       -- H.current.draw_status = "finished"
       -- vim.defer_fn(function()
       H.current.grapple_status = false
@@ -401,10 +395,8 @@ Grappler.grapple = function(direct) -- grapple()
   end)
 
   local reel_callback = function()
-    --   print("reel_callback, n_reel_steps=" .. n_reel_steps)
     -- end
     -- local reel_callback2 = function()
-    print("reel_callback, n_reel_steps=" .. n_reel_steps)
     H.original_virtualedit = vim.wo.virtualedit
     -- vim.wo.virtualedit = "all"
 
@@ -582,22 +574,18 @@ H.ray_cast_for_grapple_target = function(original_line, original_col, direct)
   local step = 0
   while not_done do
     if cur_line < 1 then
-      print("found target due to line: ", cur_line, "< 1")
       target_line = 1 -- 1 indexed ughhh
       target_col = cur_col -- TODO break
       not_done = false
-    elseif cur_line >= max_line then
-      print("found target due to line: ", cur_line, ">= max_line == ", max_line)
+    elseif cur_line > max_line then
       target_line = max_line
       target_col = cur_col -- TODO break
       not_done = false
     elseif cur_col < 0 then -- 0 indexed WTF why are they different?
-      print("found target due to col: ", cur_col, "< 0")
       target_col = 0
       target_line = cur_line -- TODO break
       not_done = false
     elseif cur_col >= max_col then -- idk about the edges yet
-      print("found target due to col: ", cur_col, ">= max_col == ", max_col)
       target_col = max_col
       target_line = cur_line -- TODO break
       not_done = false
@@ -605,7 +593,6 @@ H.ray_cast_for_grapple_target = function(original_line, original_col, direct)
 
     if not_done == true then
       local line_content = vim.api.nvim_buf_get_lines(0, cur_line - 1, cur_line, false)[1] -- [1] to grab the 1 and only line we requested
-      print("line_content[line=", cur_line, ",col=", cur_col, "]=", H.char_at(line_content, cur_col))
       local too_short = #line_content <= cur_col
       local found_char = not too_short
       if not too_short then -- skip some work if the line is too short to find a char anyway
@@ -618,7 +605,6 @@ H.ray_cast_for_grapple_target = function(original_line, original_col, direct)
           end
         end
       end
-      print("found_char: ", found_char, ", w/ found_whitespace_yet == ", found_whitespace_yet)
 
       -- if haven't found char, then we are on whitespace,
       if not found_char then
@@ -626,15 +612,11 @@ H.ray_cast_for_grapple_target = function(original_line, original_col, direct)
         -- or we have been grappling thru a solid block of text (and step > 0)
         if not found_whitespace_yet and step > 0 then
           target_line, target_col = cur_line - direct[1], cur_col - direct[2]
-          print("finally hit whitespace @ l,c:", cur_line, ",", cur_col)
-          print("setting hook just behind it, at ..." .. target_line .. "," .. target_col)
           not_done = false
         else
           found_whitespace_yet = true
         end
       elseif found_whitespace_yet and found_char then
-        print("matched @ l,c:", cur_line, ",", cur_col)
-
         -- want to avoid 1-distance grapples inside of a block of text eg.
         --	 eg. in the example below, if we grapple up-right  from the cursor, do we want to land on
         -- X, Y, or Z? Im gonna say never X and Y by default, with Z (pass through edge) being an option later on.
@@ -664,9 +646,6 @@ H.ray_cast_for_grapple_target = function(original_line, original_col, direct)
         -- - vim.fn.virtcol({ res.src.line, res.src.col })
         local delta_line = res_.delta_line
         local n_chain_steps = res_.n_chain_steps
-        print("delta_line: " .. delta_line)
-        print("delta_col: " .. delta_col)
-        print("n_steps: " .. n_chain_steps)
         if n_chain_steps > 0 then
           target_col = cur_col
           target_line = cur_line
@@ -757,11 +736,9 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
 
   local virt_text
   if hook == true then
-    -- print("hook")
     -- virt_text = { { "X", hl_group } }
     virt_text = { { "", hl_group } }
   else
-    -- print("chain")
     if direct[2] == 1 then
       if direct[1] == -1 then
         virt_text = { { "╱", hl_group } }
@@ -803,20 +780,23 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
     if reel then
       local succ = pcall(vim.api.nvim_buf_del_extmark, buf_id, H.ns_id, extmark_id)
       if succ then
-        -- print("deleted extmark")
-        -- print("cursor currently at ")
-        print("setting cursor to line: " .. line .. ", col: " .. col)
-        vim.api.nvim_win_set_cursor(0, { line, col })
-        -- TODO: for some reason nvim_win_set_cursor() has different x offset on lines with and without content
-        -- and its affected by tabs, because a tab is a single character (a single column)
-        -- not sure if its affected by tabs outside of virualedit tho
-        local stupid_virtual_screen_offset = vim.fn.virtcol(".") - col - 1
-        if stupid_virtual_screen_offset ~= 0 then
-          vim.api.nvim_win_set_cursor(0, { line, col - stupid_virtual_screen_offset })
+        if col < 0 then
+          -- vim.notify("why r u trying to crash with setting cursor to col = " .. col)
+          col = 0
+        else
+          vim.api.nvim_win_set_cursor(0, { line, col })
+          -- TODO: for some reason nvim_win_set_cursor() has different x offset on lines with and without content
+          -- and its affected by tabs, because a tab is a single character (a single column)
+          -- not sure if its affected by tabs outside of virualedit tho
+          local stupid_virtual_screen_offset = vim.fn.virtcol(".") - col - 1
+          if stupid_virtual_screen_offset ~= 0 then
+            vim.api.nvim_win_set_cursor(0, { line, col - stupid_virtual_screen_offset })
+          end
+          return true
         end
-        return true
       end
-      print("failed to del extmark w/ id (lemmeguess_nil_lol:" .. extmark_id .. ")")
+      -- idk why this tends to fail for i but TODO: fix later.
+      -- btw it wasnt from tring to delete the same extmark id multiple times so idk what caused it...
       return false
     else
       -- return pcall(vim.api.nvim_buf_set_extmark, buf_id, H.ns_id, line - 1, 0, extmark_opts)
