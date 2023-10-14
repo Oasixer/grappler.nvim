@@ -1,3 +1,5 @@
+--
+--
 -- Module definition ==========================================================
 local Grappler = {}
 local H = {}
@@ -133,8 +135,22 @@ Grappler.config = {
 }
 
 -- Define a function to highlight non-space characters in each line
+-- function H.clear_nonspace_highlights(buf_id, ){
+--   let succ pcall(vim.api.nvim_buf_clear_namespace, buf_id or 0, H.ns_id, 0, -1)
+--   end
+-- }
 function H.highlightNonSpaceCharacters()
-  vim.notify("hi")
+  vim.cmd([[highlight NonSpaceHighlight guibg=#660040 guifg=#939993]])
+
+  local extmark_opts = {
+    hl_mode = "combine", -- Replace existing text color
+    priority = 2,
+    right_gravity = false,
+    virt_text = { { " ", "NonSpaceHighlight" } },
+    virt_text_win_col = -1, -- TEMP (replaced)
+    virt_text_pos = "overlay",
+  }
+  -- vim.notify("hi")
   -- Get the current buffer
   local current_buf = vim.api.nvim_get_current_buf()
 
@@ -142,54 +158,40 @@ function H.highlightNonSpaceCharacters()
   local num_lines = vim.api.nvim_buf_line_count(current_buf)
 
   local cursor = vim.api.nvim_win_get_cursor(0)
-  local line, col = cursor[1], cursor[2]
+  local cursor_line, cursor_col = cursor[1], cursor[2]
 
   -- Define the namespace for our highlights
-  local ns_id = vim.api.nvim_create_namespace("highlight_non_space")
+  -- local ns_id = vim.api.nvim_create_namespace("highlight_non_space")
+  local ns_id = H.ns_id
 
   -- Iterate through each line
-  -- for line_num = 0, num_lines - 1 do
-  -- Get the content of the current line
-  local line_content = vim.api.nvim_buf_get_lines(current_buf, line, line + 1, false)[1]
+  for line_num = 0, num_lines - 1 do
+    -- Get the content of the current line
+    local line_content = vim.api.nvim_buf_get_lines(current_buf, line_num, line_num + 1, false)[1]
+    if line_content == nil then
+      print("couldn't get " .. line_num)
+    end
 
-  -- Create a table to store extmark options for this line
-  --
-  vim.cmd([[highlight NonSpaceHighlight guibg=#660040 gui=nocombine]])
-
-  local extmark_opts = {
-    hl_mode = "replace", -- Replace existing text color
-    priority = 2,
-    right_gravity = false,
-    virt_text = { { "", "NonSpaceHighlight" } },
-    virt_text_win_col = -1, -- TEMP (replaced)
-    virt_text_pos = "overlay",
-  }
-
-  -- vim.cmd([[highlight IndentBlanklineIndent1 guibg=#292e40 guifg=#3b4261 gui=nocombine]])
-  -- Iterate through characters in the line
-  --
-	--stylua: ignore
-
-                   
-  -- extmark_opts.end_col = 15 -- out of range??
-  extmark_opts.virt_text_win_col = 7
-  local res = vim.api.nvim_buf_set_extmark(current_buf, ns_id, 175, 0, extmark_opts) -- 0 is col but seems to have no effect, see virt_text_win_col idk why col does nothing
-  vim.notify("res: " .. res)
-  -- for col = 0, #line_content do
-  --   local char = string.sub(line_content, col, col)
-  --   if char ~= " " then
-  --     -- Highlight non-space characters with a custom highlight group
-  --     extmark_opts.hl_group = "NonSpaceHighlight" -- Change this to your desired highlight group
-  --     -- Create an extmark for the non-space character
-  --     -- vim.api.nvim_buf_set_extmark(current_buf, ns_id, line_num, col, extmark_opts)
-  --     vim.api.nvim_buf_set_extmark(current_buf, ns_id, 167, 2, extmark_opts)
-  --   end
-  -- end
-  -- end
+    --stylua: ignore
+    -- extmark_opts.end_col = 15 -- out of range??
+    -- extmark_opts.virt_text_win_col = 7
+    -- local res = vim.api.nvim_buf_set_extmark(current_buf, ns_id, 175, 0, extmark_opts) -- 0 is col but seems to have no effect, see virt_text_win_col idk why col does nothing
+    for col = 0, #line_content do
+      local found_char = not H.is_idx_blank(line_content,col)
+      if found_char then
+        -- Highlight non-space characters with a custom highlight group
+        -- extmark_opts.
+        local char_at = H.char_at(line_content, col)
+        extmark_opts.virt_text = { { char_at, "NonSpaceHighlight" } }
+        extmark_opts.virt_text_win_col = col -- 0 indexed col <->1 indexed fucking lua string
+        extmark_opts.hl_group = "NonSpaceHighlight" -- Change this to your desired highlight group
+        -- Create an extmark for the non-space character
+        -- vim.api.nvim_buf_set_extmark(current_buf, ns_id, line_num, col, extmark_opts)
+        vim.api.nvim_buf_set_extmark(current_buf, ns_id, line_num, 0, extmark_opts)
+      end
+    end
+  end
 end
-
--- Call the function to highlight non-space characters
--- highlightNonSpaceCharacters()
 
 Grappler.toggle_grapple_mode = function() -- grapple()
 end
@@ -197,28 +199,93 @@ end
 Grappler.clear_symbols = function() -- grapple()
 end
 
-Grappler.grapple = function(direct) -- grapple()
-  H.highlightNonSpaceCharacters()
+H.get_deltas = function(src, target, direct)
+  print(
+    "get_deltas. src: "
+      .. serialize_table(src)
+      .. " target: "
+      .. serialize_table(target)
+      .. "direct: "
+      .. serialize_table(direct)
+  )
+  local target_line, target_col = target.line, target.col
+  local original_line, original_col = src.line, src.col
+  local delta_line, delta_col = (target_line - original_line), (target_col - original_col)
+  if direct[2] == 0 then
+    delta_col = 0
+    -- TODO: temp fix for virtcol nonsense
+    -- specifically, i cant do virtcol({line,x}) when x is > the length of line `line` because it just returns 0,
+    -- yet, when I have my cursor beyond the legnth of line `line` using virtualedit, virtcol(".") returns the correct virtual col.
+    -- I just want to be able to do that, but for other lines than the current one. virtcol({line, "."}) doesn't seem to work either.
+    -- ... the fact that this function even needs `direct` is nonsense haha...
+    -- ... i mean literally i could technically fix this by setting the cursor to target and doing virtcol(".") then returning the cursor but thats ridiculous.
+  elseif direct[2] == 1 and direct[1] == -1 then
+    delta_col = delta_line
+  elseif direct[2] == -1 and direct[1] == -1 then
+    delta_col = -delta_line
+  elseif direct[1] == 0 then
+  end
+  local n_chain_steps = math.max(math.abs(delta_col), math.abs(delta_line)) - 1
+  local res = {
+    delta_line = delta_line,
+    delta_col = delta_col,
+    n_chain_steps = n_chain_steps,
+  }
+  print("res from in get_deltas: " .. serialize_table(res))
+  return res
 end
-Grappler.grapple2 = function(direct) -- grapple()
+
+Grappler.grapple = function(direct) -- grapple()
   if H.current.grapple_status == true then
     -- if H.current.draw_status == "drawing" then
     print("already drawing, u tryna crash me?")
     return
   end
+  -- H.highlightNonSpaceCharacters()
   H.current.grapple_status = true
-  H.current.draw_status = "drawing"
+  -- H.current.draw_status = "drawing"
   local config = H.get_config()
   local tick_ms = config.draw.tick_ms
   local delay = config.draw.delay
   local buf_id = vim.api.nvim_get_current_buf()
   -- local delays = {}
   local cursor = vim.api.nvim_win_get_cursor(0)
-  local line, col = cursor[1], cursor[2]
-  print("grapple from l,c(", line, ",", col, ")")
-  local res = H.ray_cast(line, col, direct)
-  print("res; " .. serialize_table(res))
+  local line = cursor[1]
+  local col = vim.fn.virtcol(".") - 1
 
+  -- local line_content = vim.api.nvim_buf_get_lines(0, line - 1, line, false)[1] -- [1] to grab the 1 and only line we requested
+  local max_virt_col = vim.fn.virtcol("$")
+
+  if direct[1] == 0 and direct[2] == 1 then -- right
+    local delta = max_virt_col - col
+    vim.notify("delta: " .. max_virt_col - col)
+    if delta == 3 then
+      --     / last word in line, cursor on X
+      -- aaXa
+      --
+      -- just move right one.
+      vim.api.nvim_feedkeys("l", "n", false)
+      H.current.grapple_status = false
+      return
+    end
+    if delta == 2 then
+      vim.notify("no.")
+      H.current.grapple_status = false
+      return
+    end
+  end
+  -- local line, col = cursor[1], cursor[2]
+  print("grapple from l,c(", line, ",", col, ")")
+  local res = H.ray_cast_for_grapple_target(line, col, direct)
+  print("res; " .. serialize_table(res))
+  if not res.found_target then
+    print("no target found")
+    H.current.grapple_status = false
+    return
+  end
+  -- end
+
+  -- Grappler.grapple2 = function(direct) -- grapple()
   local draw_opts = {
     event_id = H.current.event_id,
     type = "animation",
@@ -226,10 +293,6 @@ Grappler.grapple2 = function(direct) -- grapple()
     tick_ms = config.draw.tick_ms,
     priority = config.draw.priority,
   }
-  if not res.found_target then
-    print("no target found")
-    return
-  end
 
   -- todo use a sensible opts structure or something...								 chains, reel
   local draw_func_chain = H.make_draw_function2(buf_id, draw_opts, direct, false, false)
@@ -238,14 +301,15 @@ Grappler.grapple2 = function(direct) -- grapple()
 
   -- H.normalize_animation_opts()
   -- local animation_func = config.draw.animation --Grappler.gen_animation.linear2(100)
+  -- local delta_col = vim.fn.virtcol({ res.target.line, res.target.col }) - vim.fn.virtcol({ res.src.line, res.src.col })
+  -- local tmp_delta1 = vim.fn.virtcol({ res.target.line, res.target.col })
+  -- local tmp_delta2 = vim.fn.virtcol({ res.src.line, res.src.col })
 
-  local delta_col, delta_line = (res.target.line - res.src.line), (res.target.col - res.src.col)
-  local n_chain_steps = math.max(math.abs(delta_col), math.abs(delta_line)) - 1
-  print("delta_line: " .. delta_line)
-  print("delta_col: " .. delta_col)
-  print("n_steps: " .. n_chain_steps)
-
-  print("target_line, col, n_steps: " .. res.target.line .. ", " .. res.target.col .. ", " .. n_chain_steps)
+  local res_ = H.get_deltas(res.src, res.target, direct)
+  print("hi69")
+  local n_chain_steps = res_.n_chain_steps
+  print("res received from get_deltas: " .. serialize_table(res_))
+  -- print("target_line, col, n_steps: " .. res.target.line .. ", " .. res.target.col .. ", " .. n_chain_steps)
 
   -- Grappler.grapple_ = function(direct)
   local n_reel_steps = n_chain_steps + 1 -- TODO: resolve this
@@ -283,7 +347,7 @@ Grappler.grapple2 = function(direct) -- grapple()
         table.insert(extmark_ids["hook"], hook_extmark_id)
       end
 
-      H.current.draw_status = "finished"
+      -- H.current.draw_status = "finished"
       vim.defer_fn(function()
         H.finished_callback()
       end, delay)
@@ -308,7 +372,7 @@ Grappler.grapple2 = function(direct) -- grapple()
   local draw_reel_step = vim.schedule_wrap(function()
     -- print("draw_reel_step, n_steps=" .. n_reel_steps .. ",step=" .. reel_step)
     local all_extmarks = extmark_ids.all()
-    -- print("all_extmarks: " .. serializeTable(extmark_ids))
+    -- print("all_extmarks: " .. serialize_table(extmark_ids))
     -- print(": " .. all_extmarks[reel_step + 1])
     local succ =
       draw_func_reel(og_line + direct[1] * reel_step, og_col + direct[2] * reel_step, all_extmarks[reel_step + 1])
@@ -337,6 +401,9 @@ Grappler.grapple2 = function(direct) -- grapple()
   end)
 
   local reel_callback = function()
+    --   print("reel_callback, n_reel_steps=" .. n_reel_steps)
+    -- end
+    -- local reel_callback2 = function()
     print("reel_callback, n_reel_steps=" .. n_reel_steps)
     H.original_virtualedit = vim.wo.virtualedit
     -- vim.wo.virtualedit = "all"
@@ -377,7 +444,7 @@ H.timer = vim.uv.new_timer()
 -- - `event_id` - counter for events.
 -- - `scope` - latest drawn scope.
 -- - `draw_status` - status of current drawing.
-H.current = { event_id = 0, draw_status = "none", grapple_status = false }
+H.current = { event_id = 0, grapple_status = false }
 
 -- Helper functionality =======================================================
 -- Settings -------------------------------------------------------------------
@@ -450,76 +517,59 @@ H.get_config = function(config)
   return vim.tbl_deep_extend("force", Grappler.config, vim.b.miniindentscope_config or {}, config or {})
 end
 
--- Scope ----------------------------------------------------------------------
--- Line indent:
--- - Equals output of `vim.fn.indent()` in case of non-blank line.
--- - Depends on `MiniIndentscope.config.options.border` in such way so as to
---	 ignore blank lines before line not recognized as border.
-H.get_line_indent = function(line, opts)
-  local prev_nonblank = vim.fn.prevnonblank(line)
-  local res = vim.fn.indent(prev_nonblank)
-
-  -- Compute indent of blank line depending on `options.border` values
-  if line ~= prev_nonblank then
-    local next_indent = vim.fn.indent(vim.fn.nextnonblank(line))
-    local blank_rule = H.blank_indent_funs[opts.border]
-    res = blank_rule(res, next_indent)
-  end
-
-  return res
-end
-
-function findNonWhitespaceIndices(line)
-  local pattern = "%S"
-  local firstIndex = string.find(line, pattern)
-  local lastIndex = string.find(string.reverse(line), pattern)
-
-  if firstIndex then
-    lastIndex = #line - lastIndex + 1
-  end
-
-  if not firstIndex or not lastIndex then
-    firstIndex = nil
-    lastIndex = nil
-  end
-
-  return firstIndex, lastIndex
-end
-
 -- like indexing a python string so char at 0-indexed idx
 H.char_at = function(str, idx)
   return str:sub(idx + 1, idx + 1) -- account for 1-indexing bleh
 end
+
 H.is_idx_blank = function(line_content, col)
   local char = H.char_at(line_content, col)
+  local char_left = H.char_at(line_content, col - 1)
+  local char_right = H.char_at(line_content, col + 1)
   local match = char:match("%s")
-  -- print("investigating_char: " .. char)
-  -- print("char:match for whitespace:", char:match("%s"))
-  -- print("my version: ", char:match("%s") or false)
-  return match ~= nil
-  -- return char:match("%s") or false
+  local found_char_left = not char_left:match("%s")
+  local found_char_right = not char_right:match("%s")
+  if match == nil then
+    return false
+  end
+  if found_char_left and found_char_right then
+    return false
+  end
+  return true
 end
-H.ray_cast = function(original_line, original_col, direct)
+
+--
+-- for grappling hook based movement, cast a ray in one of 8 diagonal directions
+--                                      [permutations of line=<1|0|-1>,col=<1|0|-1>,]]
+-- Params:
+--   original_line(int): 0-indexed line from which the grappling hook was launched,
+--   original_col(int): 0-indexed col from which the grappling hook was launched
+--
+-- Returns:
+--   table: {
+--     src={line,col},
+--     target=<{line,col} | nil>,
+--     found_target=bool
+--   }
+--    [cursor]
+--       |   ____[target]
+-- eg.   V  V
+--  Lorem   Ipsum [before keypress]
+--  Lorem█--psum [after]
+--
+-- in this example, the cursor was 3 cols from the target
+H.ray_cast_for_grapple_target = function(original_line, original_col, direct)
   local target_line, target_col = original_line, original_col
   -- ideally if we dont find a target we won't grapple at all... but this seems like a reasonable default.
   --
-  -- print("setup from line: " .. line)
-  --
-  local max_col = vim.fn.winwidth(0) - 7
-  -- local max_line = nvim_buf_line_count(vim.fn.bufnr())
-
+  local max_col = vim.fn.winwidth(0) - 7 -- account for the left gutter 7 chars wide
   local max_line = vim.fn.line("$")
 
-  -- line = line - 1 -- for UR
   local cur_line = original_line + direct[1]
   local cur_col = original_col + direct[2]
 
   local original_line_content = vim.api.nvim_buf_get_lines(0, original_line - 1, original_line, false)[1] -- [1] to grab the 1 and only line we requested
-  -- local first_step_line_content = vim.api.nvim_buf_get_lines(0, cur_line - 1, cur_line, true)[1] -- [1] to grab the 1 and only line we requested
   local found_whitespace_yet = H.is_idx_blank(original_line_content, original_col)
-  -- local found_whitespace_yet = H.is_idx_blank(first_step_line_content, cur_col)
-
-  print("original col was whitespace: ", found_whitespace_yet)
 
   if cur_line > max_line then
     print("line: ", cur_line, "> max_line: ", max_line, ". returning early, no target.")
@@ -569,11 +619,6 @@ H.ray_cast = function(original_line, original_col, direct)
         end
       end
       print("found_char: ", found_char, ", w/ found_whitespace_yet == ", found_whitespace_yet)
-      -- if not found_char then
-      --	 if not found_whitespace_yet then
-      --		 found_whitespace_yet = true
-      -- end
-      --
 
       -- if haven't found char, then we are on whitespace,
       if not found_char then
@@ -587,44 +632,58 @@ H.ray_cast = function(original_line, original_col, direct)
         else
           found_whitespace_yet = true
         end
-        -- if steps == 0
-        -- end
       elseif found_whitespace_yet and found_char then
         print("matched @ l,c:", cur_line, ",", cur_col)
 
-        -- now lets make sure its not just a single space
-
         -- want to avoid 1-distance grapples inside of a block of text eg.
-        --	 eg. if we grapple up-right  from the cursor, do we want to land on
-        -- X, Y, or Z? Im gonna say never X so Y by default.
+        --	 eg. in the example below, if we grapple up-right  from the cursor, do we want to land on
+        -- X, Y, or Z? Im gonna say never X and Y by default, with Z (pass through edge) being an option later on.
         --
         -- cccc cccc Z---
         --
         -- bbbb --Y- bbbb
         -- aaaa -X-- aaaa
         -- blah █lah blah
-        local delta_col, delta_line = (cur_line - original_line), (cur_col - original_col)
-        local n_chain_steps = math.max(math.abs(delta_col), math.abs(delta_line)) - 1
+        --
+        -- a "chain step" is an iteration of drawing chain in the grappling hook ie.
+        --------------------
+        --  Lorem   Ipsum [before keypress]
+        --  Lorem█--psum [after]
+        --
+        -- in this example, the cursor was 3 cols from the target, and so there are 2 chains in between
+        -- so n_chain_steps would be 2, hence the verbose name
+        --
+        -- local delta_col, delta_line = (cur_line - original_line), (cur_col - original_col)
+        --
+        local res_ = H.get_deltas(
+          { line = original_line, col = original_col },
+          { line = cur_line, col = cur_col },
+          direct
+        )
+        local delta_col = res_.delta_col
+        -- - vim.fn.virtcol({ res.src.line, res.src.col })
+        local delta_line = res_.delta_line
+        local n_chain_steps = res_.n_chain_steps
+        print("delta_line: " .. delta_line)
+        print("delta_col: " .. delta_col)
+        print("n_steps: " .. n_chain_steps)
         if n_chain_steps > 0 then
           target_col = cur_col
           target_line = cur_line
           not_done = false
         else
-          print("skipping 0-chain-step (so 1 total step) grapple")
+          print("skipping n_chain_steps == 0 (so 1 dist. away from target) grapple")
         end
       end
     end
     step = step + 1
     if step > 80 then
-      vim.notify("tried to go >80 steps hehe")
+      vim.notify("tried to go >80 steps; hehe; maybe bug maybe infinite loop; best be safe out there")
       return
     end
     cur_line = cur_line + direct[1]
     cur_col = cur_col + direct[2]
   end
-  -- print(
-  --	 "found target (line:" .. target_line .. ",col:" .. target_col .. ") @ dist." .. (target_line - original_line)
-  -- )
   return {
     found_target = true,
     target = { line = target_line, col = target_col },
@@ -718,6 +777,8 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
         virt_text = { { "╱", hl_group } }
       elseif direct[1] == -1 then
         virt_text = { { "╲", hl_group } }
+      else
+        virt_text = { { "-", hl_group } }
       end
     end
   end
@@ -746,7 +807,7 @@ H.make_draw_function2 = function(buf_id, opts, direct, hook, reel)
         -- print("cursor currently at ")
         print("setting cursor to line: " .. line .. ", col: " .. col)
         vim.api.nvim_win_set_cursor(0, { line, col })
-        -- TODO, for some reason nvim_win_set_cursor() has different x offset on lines with and without content
+        -- TODO: for some reason nvim_win_set_cursor() has different x offset on lines with and without content
         -- and its affected by tabs, because a tab is a single character (a single column)
         -- not sure if its affected by tabs outside of virualedit tho
         local stupid_virtual_screen_offset = vim.fn.virtcol(".") - col - 1
