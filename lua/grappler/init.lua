@@ -24,12 +24,6 @@ Grappler.setup = function(config)
   -- Apply config
   H.apply_config(config)
 
-  -- Create highlighting
-  -- vim.api.nvim_exec2(
-  --   [[hi default link GrapplerSymbolChain Delimiter
-  -- 	hi default link GrapplerSymbolOff GrapplerSymbol]],
-  --   {}
-  -- )
   vim.cmd(
     "highlight GrapplerSymbolChain guibg="
       .. config.draw.hook_color.bg
