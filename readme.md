@@ -7,7 +7,9 @@
 <p align="center">A new and <i>crunchy</i> approach to medium-scale movements in vim by raycasting for whitespace boundaries.
 Heavily inspired by grappling hooks in 2D platformers. Built and configured using <b>lua</b> 
 </p>
-  <!-- (see <a href="https://neovim.io/doc/user/lua-guide.html">lua guide</a>) -->
+
+# blah
+
 ![demo-gif](https://kaelan.xyz/images/grappler.gif)
 
 ![demo-gif2](https://kaelan.xyz/images/grappler.mp4)
