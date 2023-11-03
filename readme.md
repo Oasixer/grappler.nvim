@@ -1,7 +1,7 @@
  <h1 align="center">
   grappler.nvim
 </h1>
-<p align="center"><i>Snappy</i> movement for Neovim, inspired by grappling hooks in 2D platformers. Built and configured using <b>lua</b> (see [Lua-guide](https://neovim.io/doc/user/lua-guide.html))</p>
+<p align="center">A new and <i>crunchy</i> approach to medium-scale movements in vim by raycasting for whitespace boundaries. Heavily inspired by grappling hooks in 2D platformers. Built and configured using <b>lua</b> (see [Lua-guide](https://neovim.io/doc/user/lua-guide.html))</p>
 
 ![demo-gif](https://github.com/Oasixer/grappler.nvim/assets/24990515/0765b750-f971-4506-bdae-92c3e23b3e21)
 
