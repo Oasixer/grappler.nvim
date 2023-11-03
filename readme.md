@@ -5,4 +5,4 @@ Heavily inspired by grappling hooks in 2D platformers. Built and configured usin
 
 # blah
 
-![Preview](https://i.imgur.com/TTTja6t.gif)
+<img alt="Portfolio Gif" src="https://kaelan.xyz/images/grappler.gif" loading="lazy">
