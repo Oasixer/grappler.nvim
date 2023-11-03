@@ -9,6 +9,7 @@ Heavily inspired by grappling hooks in 2D platformers. Built and configured usin
 </p>
   <!-- (see <a href="https://neovim.io/doc/user/lua-guide.html">lua guide</a>) -->
 ![demo-gif](https://kaelan.xyz/images/grappler.gif)
+
 ![demo-gif2](https://kaelan.xyz/images/grappler.mp4)
 
 ![youtube-video-gif](https://github.com/Oasixer/grappler.nvim/assets/24990515/0765b750-f971-4506-bdae-92c3e23b3e21)
