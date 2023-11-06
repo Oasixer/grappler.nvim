@@ -412,6 +412,7 @@ Grappler.grapple = function(direct) -- grapple()
       H.timer:stop()
       H.undraw()
       H.undraw_nonspace()
+      H.reset_cursor_line_and_col()
       H.current.grapple_status = false
       H.final_cleanup = false -- reset in case this ever gets made global
       return
