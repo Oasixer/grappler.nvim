@@ -1,13 +1,15 @@
 # grappler.nvim
 
-<p align="center">A new and <i>crunchy</i> approach to medium-scale movements in vim by raycasting for whitespace boundaries.
+<p align="center">A new and <i>crunchy</i> approach to medium-scale movements in vim by raycasting for whitespace boundaries in one of 8 cardinal directions.
 Heavily inspired by grappling hooks in 2D platformers. Built and configured using lua.
 </p>
 
 ![grappler2](https://github.com/Oasixer/grappler.nvim/assets/24990515/b222d445-0db4-416b-9a3c-383a95499ea0)
 
-<!--toc:start-->
 ## Grappler table of contents
+
+<!--toc:start-->
+
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
