@@ -477,7 +477,8 @@ H.ns_id = vim.api.nvim_create_namespace("Grappler")
 H.ns_id_nonspace = vim.api.nvim_create_namespace("GrapplerNonSpace")
 
 -- Timer for doing animation
-H.timer = vim.uv.new_timer()
+H.timer = vim.loop.new_timer()
+-- H.timer = vim.uv.new_timer()
 
 -- Table with current relevalnt data:
 -- - `event_id` - counter for events.
